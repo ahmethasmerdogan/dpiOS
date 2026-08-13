@@ -31,7 +31,11 @@ enum {
     OPT_QUIET,
     OPT_NO_UI,
     OPT_RECORD_FRAG,
-    OPT_NO_RECORD_FRAG
+    OPT_NO_RECORD_FRAG,
+    OPT_DOH,
+    OPT_NO_DOH,
+    OPT_DOH_URL,
+    OPT_DOH_BOOTSTRAP
 };
 
 static const struct option k_long[] = {
@@ -45,6 +49,10 @@ static const struct option k_long[] = {
     { "frag-sni",      no_argument,       NULL, OPT_FRAG_SNI },
     { "record-frag",   no_argument,       NULL, OPT_RECORD_FRAG },
     { "no-record-frag", no_argument,      NULL, OPT_NO_RECORD_FRAG },
+    { "doh",           no_argument,       NULL, OPT_DOH },
+    { "no-doh",        no_argument,       NULL, OPT_NO_DOH },
+    { "doh-url",       required_argument, NULL, OPT_DOH_URL },
+    { "doh-bootstrap", required_argument, NULL, OPT_DOH_BOOTSTRAP },
     { "reverse-frag",  no_argument,       NULL, OPT_REVERSE_FRAG },
     { "ip-frag",       no_argument,       NULL, OPT_IP_FRAG },
     { "fake",          no_argument,       NULL, OPT_FAKE },
@@ -114,6 +122,12 @@ void dp_usage(const char *argv0)
 "      --wrong-chksum    give the decoy a broken TCP checksum\n"
 "      --wrong-seq       give the decoy an out-of-window sequence number\n"
 "      --seq-delta N     how far out of window (default 65536)\n"
+"\n"
+"DNS (ISS DNS sorgularini engelliyorsa):\n"
+"      --doh             run a local DNS-over-HTTPS resolver on 127.0.0.1:53\n"
+"                        and point the system at it while dpiOS runs\n"
+"      --doh-url URL     which resolver (default cloudflare-dns.com)\n"
+"      --doh-bootstrap IP  its address, so startup needs no DNS\n"
 "\n"
 "Scope:\n"
 "      --port N          additional destination port (repeatable)\n"
@@ -192,6 +206,15 @@ int dp_cli_parse(int argc, char **argv, dp_config_t *c)
         case OPT_FRAG_SNI:     c->frag_sni = true; break;
         case OPT_RECORD_FRAG:    c->record_frag = true; break;
         case OPT_NO_RECORD_FRAG: c->record_frag = false; break;
+        case OPT_DOH:            c->doh = true; break;
+        case OPT_NO_DOH:         c->doh = false; break;
+        case OPT_DOH_URL:
+            strlcpy(c->doh_url, optarg, sizeof(c->doh_url));
+            c->doh = true;
+            break;
+        case OPT_DOH_BOOTSTRAP:
+            strlcpy(c->doh_bootstrap, optarg, sizeof(c->doh_bootstrap));
+            break;
         case OPT_REVERSE_FRAG: c->reverse_frag = true; break;
         case OPT_IP_FRAG:      c->ip_frag = true; break;
 

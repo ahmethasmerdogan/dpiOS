@@ -11,6 +11,7 @@ ARCHS   ?=
 CFLAGS  += -std=c11 -O2 -g -Wall -Wextra -Wno-unused-parameter \
            -fno-omit-frame-pointer \
            -mmacosx-version-min=$(MIN_OS) $(ARCHS)
+LIBS    ?= -lcurl
 LDFLAGS += -mmacosx-version-min=$(MIN_OS) $(ARCHS)
 
 SRCDIR  := src
@@ -36,7 +37,7 @@ setup:
 	@sudo bash ./install.sh
 
 $(BIN): $(OBJECTS)
-	$(CC) $(LDFLAGS) -o $@ $^
+	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
 
 $(BUILDIR)/%.o: $(SRCDIR)/%.c | $(BUILDIR)
 	$(CC) $(CFLAGS) -MMD -MP -c -o $@ $<

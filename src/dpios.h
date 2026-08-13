@@ -90,6 +90,11 @@ typedef struct {
     char     iface[32];      /* forced egress interface, empty = autodetect */
     dp_inject_mode_t inject_mode;
 
+    /* --- dns ---------------------------------------------------------- */
+    bool doh;                /* run the local DNS-over-HTTPS resolver */
+    char doh_url[256];
+    char doh_bootstrap[64];  /* IP of the DoH host, so startup needs no DNS */
+
     /* --- lists -------------------------------------------------------- */
     char blacklist_path[1024];
     char whitelist_path[1024];
@@ -263,6 +268,13 @@ extern dp_stats_t g_stats;
 void dp_engine_init(const dp_config_t *c);
 void dp_engine_handle(uint8_t *pkt, size_t len, int af);
 void dp_engine_stats_dump(void);
+
+/* -------------------------------------------------------------------- dns */
+
+bool dp_dns_start(const dp_config_t *c);
+void dp_dns_stop(void);
+bool dp_dns_active(void);
+uint64_t dp_dns_queries(void);
 
 /* --------------------------------------------------------------------- ui */
 

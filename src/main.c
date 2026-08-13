@@ -27,6 +27,7 @@ static void cleanup(void)
     s_cleaned = true;
 
     dp_ui_stop();      /* hand the terminal back before anything else logs */
+    dp_dns_stop();     /* put the system resolver back before anything else */
     dp_pf_unload();
     dp_utun_close(&s_tun);
     dp_inject_close();
@@ -240,6 +241,14 @@ int main(int argc, char **argv)
         dp_monitor_start(&g_net);
 
     dp_engine_init(&g_cfg);
+
+    if (g_cfg.doh && !dp_dns_start(&g_cfg)) {
+        LOGE("the DoH resolver could not start; refusing to run with"
+             " DNS still hijacked");
+        cleanup();
+        return 1;
+    }
+
     dp_ui_start(&g_cfg, &g_net, &s_tun);
 
     int r = run_loop();

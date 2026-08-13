@@ -59,8 +59,21 @@ araya giriliyor ve bu, alan adına özel:
 | DoH (şifreli) | ✅ | ✅ **gerçek IP** |
 
 Büyük/küçük harf karıştırma (DNS 0x20) da denendi, filtre harfe duyarsız.
-Çözüm: adresi **şifreli DNS ile çözüp** doğrudan `/etc/hosts`'a yazmak.
-`install.sh` bunu otomatik yapıyor.
+
+Filtre ayrıca **wildcard**: var olmayan bir alt alan adı bile engel sayfasına
+gidiyor.
+
+| sorgu | sistem | gerçek |
+|-------|--------|--------|
+| `discord.com` | `195.175.254.2` | `162.159.136.232` |
+| `gateway.us-east1-b.discord.gg` | `195.175.254.2` | — |
+| `rastgele-isim.discord.gg` | `195.175.254.2` | (yok) |
+
+Bu yüzden `/etc/hosts` yetmiyor: masaüstü uygulaması çalışma anında öğrendiği
+isimleri çözüyor, statik bir dosyaya önceden yazılamaz. dpiOS bu yüzden
+**kendi şifreli DNS çözümleyicisini** çalıştırıyor (`--doh`): 127.0.0.1:53'ü
+dinliyor, sorguyu HTTPS içinde (RFC 8484) iletiyor, cevabı geri veriyor.
+Sorgu, filtrenin okuyabileceği bir biçimde hiç tele çıkmıyor.
 
 Bir de IPv6 kapısı var: ISS engelli alan adları için **uydurma bir AAAA kaydı**
 döndürüyor (ölçüldü — `discord.com`'un gerçek AAAA kaydı yok, sistem yine de
@@ -290,6 +303,8 @@ açık.
       --blacklist FILE   sadece bu alan adlarına dokun
       --whitelist FILE   bu alan adlarına asla dokunma
       --inject bpf|raw   enjeksiyon yöntemi
+      --doh              127.0.0.1:53'te şifreli DNS çözümleyici çalıştır
+      --doh-url URL      hangi çözümleyici (varsayılan cloudflare-dns.com)
       --dry-run          tespit et ve logla, ama hiçbir şeyi değiştirme
       --check            makineyi doğrula ve çık
       --unload           artık kalmış pf kurallarını temizle ve çık
@@ -373,9 +388,11 @@ açıkça yazıyorum:
 - **`-p` / passive DPI engelleme.** Gelen paketler dpiOS'a hiç uğramıyor,
   dolayısıyla DPI'ın gönderdiği sahte RST'yi düşüremeyiz. Bayrak kabul ediliyor
   ama uyarı basıp yok sayılıyor.
-- **DNS engelleme.** dpiOS TLS el sıkışmasına müdahale eder, DNS sorgusuna
-  değil. DNS katmanını `install.sh` `/etc/hosts` üzerinden çözüyor. Bu statik
-  bir çözüm: alan adının IP'si değişirse kurulumu tekrar çalıştırmak gerekir.
+- **DNS engelleme** ayrı bir katman. `--doh` ile dpiOS kendi şifreli
+  çözümleyicisini çalıştırıp sistemi ona yönlendiriyor; `install.sh` DNS engeli
+  görürse bunu otomatik açıyor. Çözümleyici başlatılamazsa `/etc/hosts`
+  yöntemine düşülüyor — o da sadece sabit isimleri kapsar, uygulamalar için
+  yetmez.
 - **`-n` / ilk segment ACK'ini bekleme.** Kernel'in TCP durum makinesini
   userspace'ten yönetmiyoruz.
 - **TLS kayıt bölme her ClientHello'da yapılamaz.** Geri kazanılacak 5 bayt
@@ -403,6 +420,7 @@ src/
   inject.c      BPF ve raw socket enjektörleri
   netinfo.c     varsayılan rota, arayüz, ARP/NDP tablosu (sysctl PF_ROUTE)
   monitor.c     pasif TTL gözlemcisi (--auto-ttl için)
+  dns.c         yerel DNS-over-HTTPS çözümleyici (--doh)
   engine.c      asıl DPI bypass mantığı
   tls.c         ClientHello ayrıştırma, TLS kayıt bölme, sahte hello üretimi
   http.c        HTTP header ayrıştırma ve manipülasyonu

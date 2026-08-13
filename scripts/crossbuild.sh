@@ -54,12 +54,30 @@ fetch net/bpf.h         net/bpf.h
 fetch sys/sys_domain.h  sys/sys_domain.h
 fetch netinet/ip6.h     netinet/ip6.h
 
+# curl headers, so the DoH resolver can at least be compile-checked here.
+# Zig ships no libcurl to link against, hence the separate compile-only pass
+# below and -DDPIOS_NO_DOH for the link.
+mkdir -p "$SHIM/curl"
+CURL_H="https://raw.githubusercontent.com/curl/curl/master/include/curl"
+for f in curl.h system.h easy.h multi.h urlapi.h mprintf.h stdcheaders.h \
+         options.h header.h typecheck-gcc.h websockets.h curlver.h; do
+    [[ -s "$SHIM/curl/$f" ]] || curl -sSfL -o "$SHIM/curl/$f" "$CURL_H/$f" || true
+done
+
 # --- build -----------------------------------------------------------------
 OUT="$REPO_DIR/build/dpios-${ARCH}-macos"
 mkdir -p "$REPO_DIR/build"
 
-echo "==> compiling for ${ARCH}-macos"
+# The DoH resolver needs libcurl, which Zig does not bundle. Compile it on its
+# own against the real curl headers to prove it builds, then leave it out of
+# the link. A native `make` on a Mac links -lcurl and includes it for real.
+echo "==> compile-checking the DoH resolver (libcurl)"
 "$ZIG" cc -target "${ARCH}-macos" \
+    -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter \
+    -I"$REPO_DIR/src" -I"$SHIM" -c -o /dev/null "$REPO_DIR/src/dns.c"
+
+echo "==> compiling for ${ARCH}-macos"
+"$ZIG" cc -target "${ARCH}-macos" -DDPIOS_NO_DOH \
     -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter \
     -I"$REPO_DIR/src" -I"$SHIM" \
     -o "$OUT" "$REPO_DIR"/src/*.c

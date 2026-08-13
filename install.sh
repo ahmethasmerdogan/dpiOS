@@ -154,6 +154,52 @@ doh_all() {
         | grep -o '"data":"[0-9][0-9.]*"' | cut -d'"' -f4
 }
 
+#
+# Tercih edilen çözüm: dpiOS'un kendi şifreli DNS çözümleyicisi.
+#
+# /etc/hosts sadece önceden bildiğimiz isimleri kapsayabilir. Oysa filtre
+# wildcard çalışıyor (ölçüldü: var olmayan bir alt alan adı bile engel
+# sayfasına gidiyor) ve masaüstü uygulamaları çalışma anında öğrendikleri
+# isimleri çözüyor - gateway.us-east1-b.discord.gg gibi. Bunları statik bir
+# dosyaya yazmak mümkün değil, o yüzden gerçek bir çözümleyici gerekiyor.
+#
+DOH_ARGS=""
+if [[ $DNS_HIJACKED -eq 1 ]]; then
+    echo
+    step "Şifreli DNS deneniyor"
+    "$BIN" -5 --doh --no-ui >/tmp/dpios-doh.log 2>&1 &
+    dohpid=$!
+    sleep 3
+
+    if kill -0 "$dohpid" 2>/dev/null; then
+        dscacheutil -flushcache 2>/dev/null
+        killall -HUP mDNSResponder 2>/dev/null
+        sleep 1
+
+        good=0
+        for site in "${SITES[@]}"; do
+            [[ "$(dns_system "$site")" == "$(dns_doh "$site")" ]] && good=$((good+1))
+        done
+
+        kill -TERM "$dohpid" 2>/dev/null
+        wait "$dohpid" 2>/dev/null
+        pfctl -a "$ANCHOR" -F all >/dev/null 2>&1
+
+        if [[ $good -eq ${#SITES[@]} ]]; then
+            ok "şifreli DNS çalışıyor — alt alan adları da kapsanıyor"
+            info "masaüstü uygulamaları da bunu kullanacak"
+            DOH_ARGS="--doh"
+            DNS_HIJACKED=0
+        else
+            warn "şifreli DNS beklendiği gibi cevap vermedi, /etc/hosts'a düşülüyor"
+        fi
+    else
+        warn "şifreli DNS çözümleyicisi başlatılamadı:"
+        tail -5 /tmp/dpios-doh.log | sed 's/^/        /'
+        info "/etc/hosts yöntemine düşülüyor (sadece sabit isimleri kapsar)"
+    fi
+fi
+
 if [[ $DNS_HIJACKED -eq 1 ]]; then
     echo
     info "DNS engeli /etc/hosts üzerinden aşılacak: adresler şifreli DNS ile"
@@ -328,7 +374,7 @@ BEST_PRESET=""
 BEST_SCORE=$BASELINE
 
 for p in "${PRESETS[@]}"; do
-    "$BIN" "-$p" --no-ui >/tmp/dpios-try.log 2>&1 &
+    "$BIN" "-$p" $DOH_ARGS --no-ui >/tmp/dpios-try.log 2>&1 &
     dpid=$!
     sleep 2
 
@@ -389,8 +435,8 @@ ok "/usr/local/bin/dpios"
 # Servis bir kolaylık, motorun kendisi değil. Kurulamazsa her şeyi iptal etmek
 # yerine uyarıp devam ediyoruz; dpiOS elle çalıştırıldığında yine çalışır.
 SERVICE_OK=1
-if bash "$REPO_DIR/scripts/install-service.sh" --skip-check "-$BEST_PRESET" \
-        >/tmp/dpios-service.log 2>&1; then
+if bash "$REPO_DIR/scripts/install-service.sh" --skip-check \
+        "-$BEST_PRESET" $DOH_ARGS >/tmp/dpios-service.log 2>&1; then
     ok "launchd servisi kuruldu, açılışta otomatik başlayacak"
 else
     SERVICE_OK=0
@@ -398,10 +444,10 @@ else
     tail -12 /tmp/dpios-service.log | sed 's/^/        /'
     echo
     info "Bu dpiOS'u engellemez — arka planda başlatmıyoruz, o kadar."
-    info "Elle çalıştırmak için:  sudo dpios -$BEST_PRESET"
+    info "Elle çalıştırmak için:  sudo dpios -$BEST_PRESET $DOH_ARGS"
     info "Tam log:                /tmp/dpios-service.log"
     # Servis yoksa da çalışsın: bu terminal kapanınca ölmemesi için nohup.
-    nohup /usr/local/bin/dpios "-$BEST_PRESET" --no-ui \
+    nohup /usr/local/bin/dpios "-$BEST_PRESET" $DOH_ARGS --no-ui \
         >/tmp/dpios-manual.log 2>&1 &
     disown 2>/dev/null || true
     sleep 2
@@ -436,7 +482,7 @@ if [[ $SERVICE_OK -eq 1 ]]; then
     echo "  ${D}durdur${R}    sudo launchctl bootout system/${LABEL}"
     echo "  ${D}kaldır${R}    sudo ./scripts/uninstall-service.sh"
 else
-    echo "  ${D}başlat${R}    sudo dpios -$BEST_PRESET"
+    echo "  ${D}başlat${R}    sudo dpios -$BEST_PRESET $DOH_ARGS"
     echo "  ${D}durdur${R}    sudo pkill -x dpios"
     echo "  ${D}servisi tekrar dene${R}"
     echo "            sudo bash scripts/install-service.sh -$BEST_PRESET"

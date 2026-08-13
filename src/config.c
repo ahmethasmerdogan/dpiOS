@@ -24,6 +24,10 @@ void dp_config_defaults(dp_config_t *c)
     c->action = DP_ACTION_RUN;
     c->foreground = true;
 
+    strlcpy(c->doh_url, "https://cloudflare-dns.com/dns-query",
+            sizeof(c->doh_url));
+    strlcpy(c->doh_bootstrap, "1.1.1.1", sizeof(c->doh_bootstrap));
+
     strlcpy(c->fake_sni, "www.w3.org", sizeof(c->fake_sni));
 }
 
@@ -147,6 +151,9 @@ void dp_config_dump(const dp_config_t *c)
     }
     LOGI("  injection         %s", c->inject_mode == INJECT_BPF ? "bpf" : "raw");
     LOGI("  ipv6              %s", c->enable_ipv6 ? "on" : "off");
+    if (c->doh)
+        LOGI("  doh resolver      %s (bootstrap %s)", c->doh_url,
+             c->doh_bootstrap);
     if (c->blacklist_path[0])
         LOGI("  blacklist         %s", c->blacklist_path);
     if (c->whitelist_path[0])
