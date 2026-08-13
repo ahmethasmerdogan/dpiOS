@@ -59,6 +59,7 @@ typedef struct {
     int  frag_https;         /* -e N   split TLS ClientHello at byte N (0 = off) */
     int  frag_persistent;    /* -k N   split subsequent HTTP requests too */
     bool frag_sni;           /* --frag-sni  split in the middle of the SNI */
+    bool record_frag;        /* split the ClientHello across two TLS records */
     bool reverse_frag;       /* send the second fragment first */
     bool ip_frag;            /* fragment at IP layer instead of TCP layer */
 
@@ -213,6 +214,8 @@ typedef struct {
 } dp_tls_info_t;
 
 bool dp_tls_parse(const uint8_t *payload, size_t len, dp_tls_info_t *out);
+/* re-frames one ClientHello record into two, same total length; 0 = not possible */
+size_t dp_tls_split_records(uint8_t *buf, size_t len, size_t cap);
 size_t dp_tls_build_fake_hello(uint8_t *buf, size_t buflen, const char *sni, size_t target_len);
 
 /* ------------------------------------------------------------------- http */
@@ -250,6 +253,7 @@ typedef struct {
     uint64_t tls_hits;
     uint64_t fakes_sent;
     uint64_t frags_sent;
+    uint64_t record_splits;
     uint64_t skipped_list;
     uint64_t oversized;
 } dp_stats_t;

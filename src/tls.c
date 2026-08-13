@@ -105,6 +105,173 @@ bool dp_tls_parse(const uint8_t *payload, size_t len, dp_tls_info_t *out)
     return true;
 }
 
+/* ------------------------------------------------- TLS record splitting -- */
+
+/*
+ * Some DPI engines reassemble TCP before they inspect, which makes splitting
+ * the ClientHello across TCP segments useless - they see the whole thing
+ * anyway. Splitting it across two *TLS records* is a different matter: a
+ * handshake message is allowed to span records, and an inspector that only
+ * parses the first record never sees a complete ClientHello.
+ *
+ * The catch is that a second record costs 5 more bytes of header, and this
+ * design cannot change the length of a segment - the kernel has already
+ * committed to covering exactly N bytes at this sequence number. So the five
+ * bytes have to come from inside the ClientHello itself.
+ *
+ * Two places are safe to take them from:
+ *   - the padding extension (RFC 7685), which exists to be ignored
+ *   - GREASE extensions (RFC 8701), which are deliberate nonsense the server
+ *     must ignore; Chromium-based clients always send a couple
+ */
+
+#define TLS_EXT_PADDING_ID 0x0015
+
+static bool is_grease_ext(uint16_t t)
+{
+    /* 0x0a0a, 0x1a1a, ... 0xfafa */
+    return ((t & 0x0f0f) == 0x0a0a) && ((t >> 8) == (t & 0xff));
+}
+
+/* Locate the extensions block; offsets are relative to the record start. */
+static bool find_extensions(const uint8_t *p, size_t len,
+                            size_t *ext_len_off, size_t *ext_total)
+{
+    if (len < 45 || p[0] != TLS_REC_HANDSHAKE || p[5] != TLS_HS_CLIENT_HELLO)
+        return false;
+
+    size_t i = 9 + 2 + 32;              /* record+hs header, version, random */
+    if (i + 1 > len) return false;
+    i += 1 + p[i];                      /* session id */
+    if (i + 2 > len) return false;
+    i += 2 + rd16(p + i);               /* cipher suites */
+    if (i + 1 > len) return false;
+    i += 1 + p[i];                      /* compression methods */
+    if (i + 2 > len) return false;
+
+    *ext_len_off = i;
+    *ext_total = rd16(p + i);
+    return (i + 2 + *ext_total) <= len;
+}
+
+static void patch_lengths(uint8_t *p, size_t ext_len_off, size_t shrink)
+{
+    /* extensions block */
+    size_t e = rd16(p + ext_len_off) - shrink;
+    p[ext_len_off] = (uint8_t)(e >> 8);
+    p[ext_len_off + 1] = (uint8_t)(e & 0xff);
+
+    /* handshake message */
+    size_t h = rd24(p + 6) - shrink;
+    p[6] = (uint8_t)((h >> 16) & 0xff);
+    p[7] = (uint8_t)((h >> 8) & 0xff);
+    p[8] = (uint8_t)(h & 0xff);
+
+    /* record */
+    size_t r = rd16(p + 3) - shrink;
+    p[3] = (uint8_t)(r >> 8);
+    p[4] = (uint8_t)(r & 0xff);
+}
+
+/* Free exactly `need` bytes. Returns the new payload length, or 0 on failure. */
+static size_t reclaim_bytes(uint8_t *p, size_t len, size_t need)
+{
+    size_t ext_len_off, ext_total;
+    if (!find_extensions(p, len, &ext_len_off, &ext_total))
+        return 0;
+
+    size_t start = ext_len_off + 2;
+    size_t end = start + ext_total;
+
+    /* First choice: shrink the padding extension in place. */
+    for (size_t i = start; i + 4 <= end; ) {
+        uint16_t type = rd16(p + i);
+        uint16_t elen = rd16(p + i + 2);
+        if (i + 4 + elen > end)
+            break;
+
+        if (type == TLS_EXT_PADDING_ID && elen >= need) {
+            size_t body = i + 4;
+            uint16_t nlen = (uint16_t)(elen - need);
+            p[i + 2] = (uint8_t)(nlen >> 8);
+            p[i + 3] = (uint8_t)(nlen & 0xff);
+            memmove(p + body + nlen, p + body + elen, len - (body + elen));
+            patch_lengths(p, ext_len_off, need);
+            return len - need;
+        }
+        i += 4 + elen;
+    }
+
+    /* Second choice: drop a GREASE extension whose total size is exactly
+     * what we need, so no other extension has to be touched. */
+    for (size_t i = start; i + 4 <= end; ) {
+        uint16_t type = rd16(p + i);
+        uint16_t elen = rd16(p + i + 2);
+        if (i + 4 + elen > end)
+            break;
+
+        if (is_grease_ext(type) && (size_t)(4 + elen) == need) {
+            memmove(p + i, p + i + 4 + elen, len - (i + 4 + elen));
+            patch_lengths(p, ext_len_off, need);
+            return len - need;
+        }
+        i += 4 + elen;
+    }
+
+    return 0;
+}
+
+/*
+ * Re-frame a ClientHello that occupies one TLS record into two records,
+ * without changing the total number of bytes. Returns the new length, which
+ * on success equals `len`, or 0 if the hello had no room to give.
+ */
+size_t dp_tls_split_records(uint8_t *buf, size_t len, size_t cap)
+{
+    if (len < 45 || buf[0] != TLS_REC_HANDSHAKE)
+        return 0;
+    if ((size_t)rd16(buf + 3) + 5 != len)
+        return 0;              /* not exactly one record, leave it alone */
+
+    size_t shrunk = reclaim_bytes(buf, len, 5);
+    if (shrunk == 0)
+        return 0;
+
+    /* Cut inside the hostname where we can - that is the field being matched. */
+    dp_tls_info_t info;
+    size_t hs_len = shrunk - 5;
+    size_t cut;
+    if (dp_tls_parse(buf, shrunk, &info) && info.sni_len > 1)
+        cut = (info.sni_offset - 5) + info.sni_len / 2;
+    else
+        cut = 1;
+
+    if (cut < 1) cut = 1;
+    if (cut >= hs_len) cut = hs_len - 1;
+
+    uint8_t tmp[DPIOS_MAX_PACKET / 8];
+    if (len > sizeof(tmp) || len > cap)
+        return 0;
+
+    const uint8_t *hs = buf + 5;
+    size_t o = 0;
+
+    tmp[o++] = TLS_REC_HANDSHAKE; tmp[o++] = buf[1]; tmp[o++] = buf[2];
+    tmp[o++] = (uint8_t)(cut >> 8); tmp[o++] = (uint8_t)(cut & 0xff);
+    memcpy(tmp + o, hs, cut); o += cut;
+
+    size_t rest = hs_len - cut;
+    tmp[o++] = TLS_REC_HANDSHAKE; tmp[o++] = buf[1]; tmp[o++] = buf[2];
+    tmp[o++] = (uint8_t)(rest >> 8); tmp[o++] = (uint8_t)(rest & 0xff);
+    memcpy(tmp + o, hs + cut, rest); o += rest;
+
+    if (o != len)
+        return 0;              /* refuse to change the length, ever */
+
+    memcpy(buf, tmp, o);
+    return o;
+}
+
 /*
  * Build a syntactically valid ClientHello for a benign hostname. This is what
  * gets sent as the decoy packet - the DPI box latches onto it, the real server

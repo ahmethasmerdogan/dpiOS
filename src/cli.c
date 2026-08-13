@@ -29,7 +29,9 @@ enum {
     OPT_SYSLOG,
     OPT_DRY_RUN,
     OPT_QUIET,
-    OPT_NO_UI
+    OPT_NO_UI,
+    OPT_RECORD_FRAG,
+    OPT_NO_RECORD_FRAG
 };
 
 static const struct option k_long[] = {
@@ -41,6 +43,8 @@ static const struct option k_long[] = {
     { "host-case",     no_argument,       NULL, 'm' },
     { "method-space",  no_argument,       NULL, 'a' },
     { "frag-sni",      no_argument,       NULL, OPT_FRAG_SNI },
+    { "record-frag",   no_argument,       NULL, OPT_RECORD_FRAG },
+    { "no-record-frag", no_argument,      NULL, OPT_NO_RECORD_FRAG },
     { "reverse-frag",  no_argument,       NULL, OPT_REVERSE_FRAG },
     { "ip-frag",       no_argument,       NULL, OPT_IP_FRAG },
     { "fake",          no_argument,       NULL, OPT_FAKE },
@@ -87,6 +91,9 @@ void dp_usage(const char *argv0)
 "  -e, --frag-https N    split a TLS ClientHello after N bytes (default 2)\n"
 "  -k, --frag-persist N  also split requests that reuse a connection\n"
 "      --frag-sni        split in the middle of the hostname instead\n"
+"      --record-frag     also split the ClientHello across two TLS records\n"
+"                        (on by default; beats DPI that reassembles TCP)\n"
+"      --no-record-frag  turn that off\n"
 "      --reverse-frag    put the second fragment on the wire first\n"
 "      --ip-frag         fragment at the IP layer rather than the TCP layer\n"
 "\n"
@@ -183,6 +190,8 @@ int dp_cli_parse(int argc, char **argv, dp_config_t *c)
             break;
 
         case OPT_FRAG_SNI:     c->frag_sni = true; break;
+        case OPT_RECORD_FRAG:    c->record_frag = true; break;
+        case OPT_NO_RECORD_FRAG: c->record_frag = false; break;
         case OPT_REVERSE_FRAG: c->reverse_frag = true; break;
         case OPT_IP_FRAG:      c->ip_frag = true; break;
 

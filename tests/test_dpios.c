@@ -92,6 +92,79 @@ static void test_tls_truncated(void)
           "plain ASCII was mistaken for a ClientHello");
 }
 
+/*
+ * Re-framing the hello into two TLS records is the technique that beats a DPI
+ * which reassembles TCP. The invariant that makes it safe here is that the
+ * total length must not move by a single byte.
+ */
+static void test_tls_record_split(void)
+{
+    uint8_t buf[2048];
+    const char *sni = "www.example.com";
+
+    size_t n = dp_tls_build_fake_hello(buf, sizeof(buf), sni, 400);
+    CHECK(n == 400, "setup: builder gave %zu", n);
+
+    uint8_t before[2048];
+    memcpy(before, buf, n);
+
+    size_t out = dp_tls_split_records(buf, n, sizeof(buf));
+    CHECK(out == n, "LENGTH CHANGED %zu -> %zu", n, out);
+    if (out != n)
+        return;
+
+    /* two records, back to back, covering the payload exactly */
+    CHECK(buf[0] == 0x16, "first record is not a handshake record");
+    size_t r1 = ((size_t)buf[3] << 8) | buf[4];
+    CHECK(5 + r1 < n, "first record still covers everything (%zu)", r1);
+
+    size_t off2 = 5 + r1;
+    CHECK(buf[off2] == 0x16, "second record header missing");
+    size_t r2 = ((size_t)buf[off2 + 3] << 8) | buf[off2 + 4];
+    CHECK(off2 + 5 + r2 == n, "records do not tile the payload: %zu vs %zu",
+          off2 + 5 + r2, n);
+
+    /* the handshake, once glued back together, must still be a valid hello */
+    uint8_t re[2048];
+    size_t hs = r1 + r2;
+    re[0] = 0x16; re[1] = buf[1]; re[2] = buf[2];
+    re[3] = (uint8_t)(hs >> 8); re[4] = (uint8_t)(hs & 0xff);
+    memcpy(re + 5, buf + 5, r1);
+    memcpy(re + 5 + r1, buf + off2 + 5, r2);
+
+    dp_tls_info_t info;
+    CHECK(dp_tls_parse(re, 5 + hs, &info) && info.is_client_hello,
+          "reassembled handshake no longer parses");
+    CHECK(strcmp(info.sni, sni) == 0,
+          "hostname damaged by the split: '%s'", info.sni);
+
+    /* the split has to land inside the hostname, that is the whole point */
+    CHECK(r1 > 0 && r1 < hs, "split at a useless position");
+
+    CHECK(memcmp(before, buf, n) != 0, "nothing actually changed");
+}
+
+static void test_tls_record_split_refuses(void)
+{
+    uint8_t buf[2048];
+
+    /* No padding extension and no GREASE - there are no bytes to reclaim,
+     * so the only correct answer is to decline rather than grow the packet. */
+    size_t n = dp_tls_build_fake_hello(buf, sizeof(buf), "tiny.example", 0);
+    uint8_t before[2048];
+    memcpy(before, buf, n);
+
+    size_t out = dp_tls_split_records(buf, n, sizeof(buf));
+    CHECK(out == 0, "should have declined, returned %zu", out);
+    CHECK(memcmp(before, buf, n) == 0, "declined but still modified the buffer");
+
+    /* garbage must never be treated as a hello */
+    uint8_t junk[64];
+    memset(junk, 0x41, sizeof(junk));
+    CHECK(dp_tls_split_records(junk, sizeof(junk), sizeof(junk)) == 0,
+          "split accepted non-TLS bytes");
+}
+
 /* ------------------------------------------------------------------ HTTP */
 
 static void test_http_parse(void)
@@ -337,6 +410,8 @@ int main(void)
     test_tls_roundtrip();
     test_tls_padding();
     test_tls_truncated();
+    test_tls_record_split();
+    test_tls_record_split_refuses();
     test_http_parse();
     test_http_mangle_preserves_length();
     test_http_mangle_no_host();

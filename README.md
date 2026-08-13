@@ -46,6 +46,33 @@ dpiOS bunun yerine macOS'un kendi parçalarını birleştirir:
   dönüş trafiği: en0 ──▶ kernel   (dpios'a hiç uğramaz)
 ```
 
+### Neden TCP parçalama tek başına yetmiyor
+
+Türkiye'deki DPI kutuları ölçüldüğü kadarıyla **TCP akışını yeniden
+birleştirdikten sonra** inceliyor. Yani ClientHello'yu TCP segmentlerine bölmek
+işe yaramıyor — DPI parçaları birleştirip bütün paketi görüyor. Ölçüm:
+
+| teknik | sonuç |
+|--------|-------|
+| tek parça (kontrol) | RST |
+| TCP'de 2. bayttan bölme | RST |
+| TCP'de SNI ortasından bölme | RST |
+| SNI'ı karışık harfle yazma | RST |
+| SNI eklentisini sona alma | RST |
+| **TLS kayıt katmanında bölme** | **ServerHello** ✅ |
+
+Çalışan tek teknik: ClientHello'yu **iki TLS kaydına** bölmek. Bir handshake
+mesajının birden fazla kayda yayılması TLS'te geçerlidir; sadece ilk kaydı
+ayrıştıran bir denetleyici hiçbir zaman bütün ClientHello'yu göremez.
+
+Bunun bir bedeli var: ikinci kayıt 5 bayt fazladan başlık demek. Ama bu
+tasarımda paket uzunluğu değiştirilemez (kernel o sequence numarasında tam N
+bayt gönderdiğini sanıyor). Çözüm: **o 5 baytı ClientHello'nun içinden geri
+kazanmak** — padding eklentisini (RFC 7685) küçülterek ya da bir GREASE
+eklentisini (RFC 8701) atarak. İkisi de sunucunun yok saymak zorunda olduğu
+alanlar. Geri kazanılacak bayt yoksa dpiOS bölmeyi yapmaz; paketi asla
+büyütmez.
+
 Kritik iki tasarım kararı:
 
 1. **`pf route-to`** ile sadece ilgilendiğimiz trafiği utun'a çeviriyoruz.
@@ -64,6 +91,31 @@ kendi paketlerimiz tekrar utun'a düşüp sonsuz döngüye girmiyor.
 ## Kurulum
 
 Gereksinim: macOS 11+, Xcode Command Line Tools (`xcode-select --install`).
+
+### Tek komut
+
+```bash
+sudo ./install.sh
+```
+
+Derler, makineyi doğrular, engelin türünü teşhis eder (DNS mi, DPI mi),
+hangi preset'in işe yaradığını **deneyerek** bulur, servisi kurar ve sonucu
+raporlar. Kendi listeni de verebilirsin:
+
+```bash
+sudo ./install.sh discord.com baskasite.com
+```
+
+> **DNS engeli ayrı bir sorun.** Bazı ISS'ler engelli alan adları için DNS
+> sorgusunu, hangi sunucuya giderse gitsin araya girip düşürüyor (ölçüldü:
+> `discord.com` sorgusu 1.1.1.1'e UDP ile cevapsız, TCP'de RST; `example.com`
+> sorunsuz). Bu yüzden "DNS'i 8.8.8.8 yap" işe yaramaz — **şifreli DNS**
+> gerekir. `install.sh` bunu tespit edip `profiles/dpios-encrypted-dns.mobileconfig`
+> profilini açar; Sistem Ayarları > Genel > Aygıt Yönetimi'nden onaylaman
+> yeterli. dpiOS DPI katmanını, profil DNS katmanını çözer; Discord için
+> **ikisi birden** gerekir.
+
+### Elle adım adım
 
 ### 1. Derle
 

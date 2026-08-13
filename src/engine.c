@@ -402,6 +402,26 @@ void dp_engine_handle(uint8_t *pkt, size_t len, int af)
 
     if (is_tls) {
         g_stats.tls_hits++;
+
+        /*
+         * Re-frame the hello into two TLS records first. This is the only
+         * technique that survives a DPI which reassembles TCP before it
+         * inspects - splitting segments alone just gets reassembled back
+         * into a complete hello. It is length neutral or it does not happen
+         * at all, so the sequence numbers stay exactly as the kernel left
+         * them.
+         */
+        if (s_cfg->record_frag) {
+            memcpy(s_work, p.payload, p.plen);
+            if (dp_tls_split_records(s_work, p.plen, sizeof(s_work)) == p.plen) {
+                p.payload = s_work;
+                g_stats.record_splits++;
+                LOGD("ClientHello re-framed into two TLS records");
+            } else {
+                LOGD("no spare bytes in the ClientHello, records left alone");
+            }
+        }
+
         if (s_cfg->frag_sni && tls.sni_len > 1)
             split = tls.sni_offset + tls.sni_len / 2;
         else
@@ -438,13 +458,14 @@ void dp_engine_handle(uint8_t *pkt, size_t len, int af)
 void dp_engine_stats_dump(void)
 {
     LOGI("packets seen %llu | passthrough %llu | http %llu | tls %llu | "
-         "fakes %llu | fragments %llu | list-skipped %llu | oversized %llu",
+         "fakes %llu | fragments %llu | record-splits %llu | list-skipped %llu | oversized %llu",
          (unsigned long long)g_stats.seen,
          (unsigned long long)g_stats.passthrough,
          (unsigned long long)g_stats.http_hits,
          (unsigned long long)g_stats.tls_hits,
          (unsigned long long)g_stats.fakes_sent,
          (unsigned long long)g_stats.frags_sent,
+         (unsigned long long)g_stats.record_splits,
          (unsigned long long)g_stats.skipped_list,
          (unsigned long long)g_stats.oversized);
     LOGI("injected %llu packets, %llu injection errors",

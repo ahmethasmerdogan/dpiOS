@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  dpiOS - Sifreli DNS (DNS-over-HTTPS)
+
+  Neden gerekli: bazi ISS'ler engelli alan adlari icin DNS sorgularini
+  hangi sunucuyu kullanirsaniz kullanin araya girip engelliyor. Olculen
+  davranis: discord.com sorgusu 1.1.1.1'e UDP ile gonderildiginde cevapsiz
+  kaliyor, TCP ile gonderildiginde RST yiyor; example.com ise sorunsuz
+  cevaplaniyor. Yani DNS sunucusunu degistirmek yetmiyor, sorgunun kendisi
+  sifrelenmeli.
+
+  ServerAddresses alani onemli: cozumleyicinin kendi adini cozmek icin duz
+  DNS'e ihtiyac duyulmasin diye onyukleme IP'lerini veriyor.
+
+  Kurulum:
+    open profiles/dpios-encrypted-dns.mobileconfig
+    Sistem Ayarlari > Genel > Aygit Yonetimi (VPN ve Aygit Yonetimi) > onayla
+
+  Kaldirma:
+    Ayni ekrandan profili secip kaldirin.
+-->
+<plist version="1.0">
+<dict>
+    <key>PayloadContent</key>
+    <array>
+        <dict>
+            <key>PayloadType</key>
+            <string>com.apple.dnsSettings.managed</string>
+            <key>PayloadIdentifier</key>
+            <string>com.dpios.encrypted-dns.payload</string>
+            <key>PayloadUUID</key>
+            <string>CAD6A6A4-8589-4FAB-A342-6382B11DA498</string>
+            <key>PayloadVersion</key>
+            <integer>1</integer>
+            <key>PayloadDisplayName</key>
+            <string>Sifreli DNS (Cloudflare DoH)</string>
+            <key>PayloadDescription</key>
+            <string>DNS sorgularini HTTPS uzerinden gonderir.</string>
+            <key>DNSSettings</key>
+            <dict>
+                <key>DNSProtocol</key>
+                <string>HTTPS</string>
+                <key>ServerURL</key>
+                <string>https://cloudflare-dns.com/dns-query</string>
+                <key>ServerAddresses</key>
+                <array>
+                    <string>1.1.1.1</string>
+                    <string>1.0.0.1</string>
+                    <string>2606:4700:4700::1111</string>
+                    <string>2606:4700:4700::1001</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
+
+    <key>PayloadType</key>
+    <string>Configuration</string>
+    <key>PayloadIdentifier</key>
+    <string>com.dpios.encrypted-dns</string>
+    <key>PayloadUUID</key>
+    <string>35CE49FC-C418-4DA4-8297-E626BF913B73</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+    <key>PayloadDisplayName</key>
+    <string>dpiOS - Sifreli DNS</string>
+    <key>PayloadDescription</key>
+    <string>DNS sorgularinin ISS tarafindan degistirilmesini engeller.</string>
+    <key>PayloadOrganization</key>
+    <string>dpiOS</string>
+    <key>PayloadRemovalDisallowed</key>
+    <false/>
+</dict>
+</plist>

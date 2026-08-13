@@ -19,6 +19,7 @@ void dp_config_defaults(dp_config_t *c)
     c->auto_ttl_delta = 1;
     c->auto_ttl_min = 3;
     c->auto_ttl_max = 10;
+    c->record_frag = true;
     c->inject_mode = INJECT_BPF;
     c->action = DP_ACTION_RUN;
     c->foreground = true;
@@ -123,6 +124,7 @@ void dp_config_dump(const dp_config_t *c)
          c->frag_sni ? " (split inside the hostname)" : "");
     LOGI("  fragment order    %s", c->reverse_frag ? "reversed" : "normal");
     LOGI("  fragment layer    %s", c->ip_frag ? "IP" : "TCP");
+    LOGI("  tls record split  %s", c->record_frag ? "on" : "off");
     LOGI("  header tricks     %s%s%s%s",
          c->host_replace ? "hoSt " : "",
          c->host_case ? "mixed-case " : "",
