@@ -429,6 +429,7 @@ void dp_engine_handle(uint8_t *pkt, size_t len, int af)
     }
 
     split = clamp_split(split, p.plen);
+    dp_ui_event(is_tls, host, split);
 
     send_fakes(&p, is_tls, p.plen);
     emit_split(&p, split);

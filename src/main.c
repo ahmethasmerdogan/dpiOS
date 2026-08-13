@@ -26,6 +26,7 @@ static void cleanup(void)
         return;
     s_cleaned = true;
 
+    dp_ui_stop();      /* hand the terminal back before anything else logs */
     dp_pf_unload();
     dp_utun_close(&s_tun);
     dp_inject_close();
@@ -83,12 +84,14 @@ static int run_loop(void)
         return 1;
     }
 
-    struct kevent ev[2];
+    struct kevent ev[3];
     int nev = 0;
     EV_SET(&ev[nev++], s_tun.fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, NULL);
     if (dp_monitor_fd() >= 0)
         EV_SET(&ev[nev++], dp_monitor_fd(), EVFILT_READ,
                EV_ADD | EV_ENABLE, 0, 0, NULL);
+    if (dp_ui_active())
+        EV_SET(&ev[nev++], 1, EVFILT_TIMER, EV_ADD | EV_ENABLE, 0, 250, NULL);
 
     if (kevent(kq, ev, nev, NULL, 0, NULL) < 0) {
         LOGE("kevent registration failed: %s", strerror(errno));
@@ -96,8 +99,9 @@ static int run_loop(void)
         return 1;
     }
 
-    LOGI("dpiOS is running - press Ctrl-C to stop "
-         "(send SIGINFO for live statistics)");
+    if (!dp_ui_active())
+        LOGI("dpiOS is running - press Ctrl-C to stop "
+             "(send SIGINFO for live statistics)");
 
     static uint8_t buf[DPIOS_MAX_PACKET];
     struct kevent out[4];
@@ -112,6 +116,10 @@ static int run_loop(void)
         }
 
         for (int i = 0; i < n; i++) {
+            if (out[i].filter == EVFILT_TIMER) {
+                dp_ui_tick();
+                continue;
+            }
             if ((int)out[i].ident == dp_monitor_fd()) {
                 dp_monitor_drain();
                 continue;
@@ -143,6 +151,7 @@ static int run_loop(void)
     }
 
     close(kq);
+    dp_ui_stop();
 
     if (s_stop)
         LOGI("caught signal %d, shutting down", (int)s_stop);
@@ -231,6 +240,7 @@ int main(int argc, char **argv)
         dp_monitor_start(&g_net);
 
     dp_engine_init(&g_cfg);
+    dp_ui_start(&g_cfg, &g_net, &s_tun);
 
     int r = run_loop();
 

@@ -67,8 +67,24 @@ bool dp_pf_anchor_reachable(void)
     return strstr(out, "com.apple/*") != NULL;
 }
 
+/*
+ * Two spellings of the same ruleset.
+ *
+ * pf moved the routing keywords between releases: in the OpenBSD 4.4/4.5 era
+ * that Apple's pf descends from, route-to sits between the interface and the
+ * address family, while later grammars expect it among the filter options at
+ * the end. We generate the historical form first and fall back to the modern
+ * one if pfctl rejects it, rather than guessing which vintage is installed.
+ */
+typedef enum {
+    RULE_ROUTE_EARLY = 0,   /* pass out on en0 route-to (...) inet proto tcp */
+    RULE_ROUTE_LATE,        /* pass out on en0 inet proto tcp ... route-to (...) */
+    RULE_VARIANT_COUNT
+} rule_variant_t;
+
 static void build_rules(const dp_config_t *c, const dp_utun_t *t,
-                        const dp_netinfo_t *ni, char *buf, size_t buflen)
+                        const dp_netinfo_t *ni, rule_variant_t variant,
+                        char *buf, size_t buflen)
 {
     char ports[512] = {0};
     size_t n = 0;
@@ -85,11 +101,17 @@ static void build_rules(const dp_config_t *c, const dp_utun_t *t,
      * hosts, loopback, link-local, CGNAT and multicast all stay on the normal
      * path. This also means BPF injection can always aim at the default
      * gateway instead of resolving per-destination link layer addresses.
+     *
+     * These are expressed as a separate earlier rule rather than as a negated
+     * destination on the diversion rule, because pf only accepts '!' in front
+     * of a single host - "to ! { a, b }" is a syntax error. With 'quick', the
+     * first rule wins and the diversion below never sees this traffic.
      */
     const char *skip4 =
         "{ 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, "
         "169.254.0.0/16, 100.64.0.0/10, 224.0.0.0/4, 198.18.0.0/15, "
         "255.255.255.255 }";
+    const char *skip6 = "{ ::1, fe80::/10, fc00::/7, ff00::/8 }";
 
     size_t off = 0;
     off += (size_t)snprintf(buf + off, buflen - off,
@@ -107,17 +129,41 @@ static void build_rules(const dp_config_t *c, const dp_utun_t *t,
             ni->egress.name);
     }
 
+    /* local and non-routable destinations: leave them completely alone */
     off += (size_t)snprintf(buf + off, buflen - off,
-        "pass out quick on %s route-to (%s %s) inet proto tcp "
-        "from any to ! %s port { %s } no state\n",
-        ni->egress.name, t->name, t->peer_ip, skip4, ports);
+        "pass out quick on %s inet proto tcp from any to %s port { %s } "
+        "no state\n",
+        ni->egress.name, skip4, ports);
+
+    if (variant == RULE_ROUTE_EARLY) {
+        off += (size_t)snprintf(buf + off, buflen - off,
+            "pass out quick on %s route-to (%s %s) inet proto tcp "
+            "from any to any port { %s } no state\n",
+            ni->egress.name, t->name, t->peer_ip, ports);
+    } else {
+        off += (size_t)snprintf(buf + off, buflen - off,
+            "pass out quick on %s inet proto tcp "
+            "from any to any port { %s } no state route-to (%s %s)\n",
+            ni->egress.name, ports, t->name, t->peer_ip);
+    }
 
     if (c->enable_ipv6 && t->peer_ip6[0]) {
         off += (size_t)snprintf(buf + off, buflen - off,
-            "pass out quick on %s route-to (%s %s) inet6 proto tcp "
-            "from any to ! { ::1, fe80::/10, fc00::/7, ff00::/8 } "
+            "pass out quick on %s inet6 proto tcp from any to %s "
             "port { %s } no state\n",
-            ni->egress.name, t->name, t->peer_ip6, ports);
+            ni->egress.name, skip6, ports);
+
+        if (variant == RULE_ROUTE_EARLY) {
+            off += (size_t)snprintf(buf + off, buflen - off,
+                "pass out quick on %s route-to (%s %s) inet6 proto tcp "
+                "from any to any port { %s } no state\n",
+                ni->egress.name, t->name, t->peer_ip6, ports);
+        } else {
+            off += (size_t)snprintf(buf + off, buflen - off,
+                "pass out quick on %s inet6 proto tcp "
+                "from any to any port { %s } no state route-to (%s %s)\n",
+                ni->egress.name, ports, t->name, t->peer_ip6);
+        }
     }
 
     (void)off;
@@ -127,28 +173,38 @@ bool dp_pf_load_rules(const dp_config_t *c, const dp_utun_t *t,
                       const dp_netinfo_t *ni)
 {
     char rules[8192];
-    build_rules(c, t, ni, rules, sizeof(rules));
-
-    LOGD("pf ruleset:\n%s", rules);
-
     char out[4096];
-    const char *argv[] = { PFCTL, "-a", DPIOS_ANCHOR, "-f", "-", NULL };
-    int rc = dp_run_feed(argv, rules, out, sizeof(out));
+    char last_err[4096];
 
-    if (rc != 0) {
-        LOGE("pfctl failed to load the dpiOS anchor (exit %d)", rc);
-        if (out[0])
-            LOGE("pfctl said: %s", out);
-        LOGE("ruleset was:\n%s", rules);
-        return false;
+    last_err[0] = '\0';
+
+    for (int v = 0; v < RULE_VARIANT_COUNT; v++) {
+        build_rules(c, t, ni, (rule_variant_t)v, rules, sizeof(rules));
+        LOGD("pf ruleset (variant %d):\n%s", v, rules);
+
+        const char *argv[] = { PFCTL, "-a", DPIOS_ANCHOR, "-f", "-", NULL };
+        int rc = dp_run_feed(argv, rules, out, sizeof(out));
+
+        if (rc == 0) {
+            if (out[0] && dp_log_level() >= DP_DEBUG)
+                LOGD("pfctl: %s", out);
+
+            s_rules_loaded = true;
+            LOGI("pf anchor %s loaded (%d port%s diverted to %s%s)",
+                 DPIOS_ANCHOR, c->nports, c->nports == 1 ? "" : "s", t->name,
+                 v == RULE_ROUTE_EARLY ? "" : ", late route-to syntax");
+            return true;
+        }
+
+        strlcpy(last_err, out, sizeof(last_err));
+        LOGD("pfctl rejected variant %d (exit %d)", v, rc);
     }
-    if (out[0] && dp_log_level() >= DP_DEBUG)
-        LOGD("pfctl: %s", out);
 
-    s_rules_loaded = true;
-    LOGI("pf anchor %s loaded (%d port%s diverted to %s)",
-         DPIOS_ANCHOR, c->nports, c->nports == 1 ? "" : "s", t->name);
-    return true;
+    LOGE("pfctl would not accept either route-to spelling");
+    if (last_err[0])
+        LOGE("pfctl said: %s", last_err);
+    LOGE("last ruleset tried:\n%s", rules);
+    return false;
 }
 
 /*

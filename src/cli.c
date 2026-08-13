@@ -28,7 +28,8 @@ enum {
     OPT_UNLOAD,
     OPT_SYSLOG,
     OPT_DRY_RUN,
-    OPT_QUIET
+    OPT_QUIET,
+    OPT_NO_UI
 };
 
 static const struct option k_long[] = {
@@ -60,6 +61,7 @@ static const struct option k_long[] = {
     { "check",         no_argument,       NULL, OPT_CHECK },
     { "unload",        no_argument,       NULL, OPT_UNLOAD },
     { "syslog",        no_argument,       NULL, OPT_SYSLOG },
+    { "no-ui",         no_argument,       NULL, OPT_NO_UI },
     { "dry-run",       no_argument,       NULL, OPT_DRY_RUN },
     { "quiet",         no_argument,       NULL, OPT_QUIET },
     { "verbose",       no_argument,       NULL, 'v' },
@@ -119,7 +121,9 @@ void dp_usage(const char *argv0)
 "      --check           run through every subsystem and report what works\n"
 "      --unload          flush leftover pf rules and exit\n"
 "      --dry-run         detect and log, but forward everything untouched\n"
+"      --no-ui           plain log lines instead of the live panel\n"
 "  -v, --verbose         repeatable; -vv adds per-packet tracing\n"
+"                        (either of these turns the live panel off)\n"
 "      --quiet           errors only\n"
 "      --syslog          also log to syslog (used by the launchd job)\n"
 "  -V, --version         print the version\n"
@@ -244,6 +248,7 @@ int dp_cli_parse(int argc, char **argv, dp_config_t *c)
         case OPT_CHECK:   c->action = DP_ACTION_CHECK; break;
         case OPT_UNLOAD:  c->action = DP_ACTION_UNLOAD; break;
         case OPT_SYSLOG:  c->use_syslog = true; break;
+        case OPT_NO_UI:   c->no_ui = true; break;
         case OPT_DRY_RUN: c->dry_run = true; break;
         case OPT_QUIET:   verbosity = -1; break;
         case 'v':         verbosity++; break;

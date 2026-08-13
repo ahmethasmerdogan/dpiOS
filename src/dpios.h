@@ -35,6 +35,11 @@ void dp_log_setlevel(dp_level_t level);
 dp_level_t dp_log_level(void);
 void dp_log(dp_level_t lvl, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
+/* When a sink is installed it takes over rendering; used by the live panel
+ * so log lines do not tear through the middle of it. */
+typedef void (*dp_log_sink_t)(dp_level_t lvl, const char *msg);
+void dp_log_set_sink(dp_log_sink_t fn);
+
 #define LOGE(...) dp_log(DP_ERR, __VA_ARGS__)
 #define LOGW(...) dp_log(DP_WARN, __VA_ARGS__)
 #define LOGI(...) dp_log(DP_INFO, __VA_ARGS__)
@@ -91,6 +96,7 @@ typedef struct {
     /* --- runtime ------------------------------------------------------ */
     bool foreground;
     bool use_syslog;
+    bool no_ui;              /* force plain log output even on a terminal */
     bool dry_run;            /* parse + decide, but forward untouched */
     int  preset;
     int  action;             /* dp_action_t */
@@ -253,6 +259,15 @@ extern dp_stats_t g_stats;
 void dp_engine_init(const dp_config_t *c);
 void dp_engine_handle(uint8_t *pkt, size_t len, int af);
 void dp_engine_stats_dump(void);
+
+/* --------------------------------------------------------------------- ui */
+
+bool dp_ui_start(const dp_config_t *c, const dp_netinfo_t *ni,
+                 const dp_utun_t *t);
+void dp_ui_tick(void);
+void dp_ui_event(bool is_tls, const char *host, size_t split);
+void dp_ui_stop(void);
+bool dp_ui_active(void);
 
 /* ------------------------------------------------------------------- util */
 

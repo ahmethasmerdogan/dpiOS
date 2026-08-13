@@ -122,6 +122,36 @@ Henüz `make install` yapmadıysan `dpios` yerine `./build/dpios` yaz.
 
 Durdurmak için `Ctrl-C`. Çalışırken `Ctrl-T` (SIGINFO) canlı istatistik basar.
 
+### Canlı panel
+
+Terminalde çalıştırdığında log seli yerine yerinde güncellenen bir panel çizer:
+
+```
+╭─ dpiOS 0.1.0 ─────────────────────────────────────────── preset -5 ╮
+│ en0 → utun5    ports 80,443    decoys on, auto-ttl                 │
+╰────────────────────────────────────────────────────────────────────╯
+
+  uptime 00:04:12   injected 1,284   errors 0
+
+  TLS        142  ████████████████████████████████████████
+  HTTP        18  █████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
+  decoys 142   fragments 320   untouched 968
+
+  recent
+    23:47:34  TLS   static.cloudflareinsights.com   split @ 2
+    23:47:34  HTTP  cdn.example.net                 split @ 2
+    23:47:34  TLS   www.example.com                 split @ 2
+
+  Ctrl-C to stop
+```
+
+Hata ve uyarı satırları panelin üstünde birikir, panel altta kalmaya devam
+eder — yani hiçbir log kaybolmaz.
+
+Panel şu durumlarda kendiliğinden kapanır ve düz log'a döner: `-v`/`-vv`
+verdiğinde, `--syslog` ile çalıştığında, çıktı bir dosyaya/pipe'a gittiğinde
+(launchd dahil). Zorla kapatmak için `--no-ui`.
+
 ### Preset'ler
 
 GoodbyeDPI ile aynı numaralandırma:
