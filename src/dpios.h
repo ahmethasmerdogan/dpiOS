@@ -87,6 +87,7 @@ typedef struct {
     int      nports;
     int      max_payload;    /* skip packets whose payload exceeds this */
     bool     enable_ipv6;
+    bool     block_quic;     /* drop UDP/443 so clients fall back to TCP */
     char     iface[32];      /* forced egress interface, empty = autodetect */
     dp_inject_mode_t inject_mode;
 

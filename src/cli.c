@@ -35,7 +35,8 @@ enum {
     OPT_DOH,
     OPT_NO_DOH,
     OPT_DOH_URL,
-    OPT_DOH_BOOTSTRAP
+    OPT_DOH_BOOTSTRAP,
+    OPT_BLOCK_QUIC
 };
 
 static const struct option k_long[] = {
@@ -66,6 +67,7 @@ static const struct option k_long[] = {
     { "port",          required_argument, NULL, OPT_PORT },
     { "max-payload",   required_argument, NULL, OPT_MAX_PAYLOAD },
     { "ipv6",          no_argument,       NULL, OPT_IPV6 },
+    { "block-quic",    no_argument,       NULL, OPT_BLOCK_QUIC },
     { "iface",         required_argument, NULL, OPT_IFACE },
     { "inject",        required_argument, NULL, OPT_INJECT },
     { "blacklist",     required_argument, NULL, OPT_BLACKLIST },
@@ -137,6 +139,8 @@ void dp_usage(const char *argv0)
 "      --iface NAME      force the egress interface\n"
 "      --inject bpf|raw  how to put packets back on the wire (default bpf)\n"
 "      --ipv6            divert IPv6 as well (experimental)\n"
+"      --block-quic      drop UDP/443 so browsers fall back to TCP,\n"
+"                        where dpiOS can actually reach the handshake\n"
 "\n"
 "Diagnostics and control:\n"
 "      --check           run through every subsystem and report what works\n"
@@ -258,6 +262,7 @@ int dp_cli_parse(int argc, char **argv, dp_config_t *c)
             break;
         case OPT_MAX_PAYLOAD: c->max_payload = atoi(optarg); break;
         case OPT_IPV6:        c->enable_ipv6 = true; break;
+        case OPT_BLOCK_QUIC:  c->block_quic = true; break;
         case OPT_IFACE:       strlcpy(c->iface, optarg, sizeof(c->iface)); break;
         case OPT_INJECT:
             if (strcmp(optarg, "bpf") == 0) {

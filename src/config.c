@@ -151,6 +151,7 @@ void dp_config_dump(const dp_config_t *c)
     }
     LOGI("  injection         %s", c->inject_mode == INJECT_BPF ? "bpf" : "raw");
     LOGI("  ipv6              %s", c->enable_ipv6 ? "on" : "off");
+    LOGI("  quic (udp/443)    %s", c->block_quic ? "blocked" : "left alone");
     if (c->doh)
         LOGI("  doh resolver      %s (bootstrap %s)", c->doh_url,
              c->doh_bootstrap);

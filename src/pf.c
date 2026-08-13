@@ -129,6 +129,18 @@ static void build_rules(const dp_config_t *c, const dp_utun_t *t,
             ni->egress.name);
     }
 
+    /*
+     * HTTP/3 travels over UDP and never passes through the TCP path we
+     * rewrite. Dropping UDP/443 makes browsers fall back to TCP after a short
+     * timeout, which puts the handshake back under our control. Off by
+     * default: it also slows down every site that uses QUIC happily.
+     */
+    if (c->block_quic) {
+        off += (size_t)snprintf(buf + off, buflen - off,
+            "block drop out quick on %s proto udp from any to any port 443\n",
+            ni->egress.name);
+    }
+
     /* local and non-routable destinations: leave them completely alone */
     off += (size_t)snprintf(buf + off, buflen - off,
         "pass out quick on %s inet proto tcp from any to %s port { %s } "

@@ -105,23 +105,58 @@ dns_system() { dscacheutil -q host -a name "$1" 2>/dev/null \
                  | awk '/^ip_address:/{print $2; exit}'; }
 dns_doh()    { curl -sS --max-time 10 -H 'accept: application/dns-json' \
                  "https://cloudflare-dns.com/dns-query?name=$1&type=A" 2>/dev/null \
-                 | grep -o '"data":"[0-9][0-9.]*"' | head -1 | cut -d'"' -f4; }
+                 | grep -o '"data":"[0-9][0-9.]*"' | cut -d'"' -f4; }
+
+#
+# Adres karşılaştırmak göründüğü kadar basit değil. İki tuzak var:
+#
+#   1. Büyük siteler her sorguda farklı adres döndürür (discord.com 6,
+#      google.com 2 A kaydı), o yüzden tek adres karşılaştırması yanlış alarm
+#      verir. Kümede arıyoruz.
+#   2. Coğrafi DNS kullanan siteler için kümeler de tutmaz: ISS'in
+#      çözümleyicisi ile Cloudflare farklı ama ikisi de geçerli adres döndürür.
+#      google.com tam olarak böyle.
+#
+# O yüzden asıl soruyu soruyoruz: sistemin verdiği adres gerçekten o siteyi
+# sunuyor mu? Sunuyorsa hangi adres olduğu önemli değil.
+#
+# 0 = yönlendiriliyor · 1 = temiz · 2 = karar verilemedi
+
+# sistemin cevabı gerçek adres kümesinin içinde mi (kesin ama dar)
+dns_matches() {
+    local sys real
+    sys="$(dns_system "$1")"
+    real="$(dns_doh "$1")"
+    [[ -z "$real" ]] && return 2
+    [[ -z "$sys" ]] && return 0
+    printf '%s\n' "$real" | grep -qx "$sys" && return 1 || return 0
+}
+
+dns_verdict() {
+    dns_matches "$1"
+    local m=$?
+    [[ $m -ne 0 ]] && return $m          # temiz ya da karar verilemedi
+
+    # Küme dışı bir adres. Yönlendirme mi, yoksa sadece başka bir sunucu mu?
+    local sys
+    sys="$(dns_system "$1")"
+    [[ -z "$sys" ]] && return 0
+    if curl -sS --max-time 8 -o /dev/null \
+            --resolve "$1:443:$sys" "https://$1/" 2>/dev/null; then
+        return 1                          # siteyi sunuyor, sorun yok
+    fi
+    return 0
+}
 
 DNS_HIJACKED=0
 for site in "${SITES[@]}"; do
-    sys="$(dns_system "$site")"
-    real="$(dns_doh "$site")"
-    if [[ -z "$real" ]]; then
-        warn "$site — şifreli DNS cevap vermedi, karşılaştırma yapılamadı"
-    elif [[ -z "$sys" ]]; then
-        bad "$site — sistem DNS'i hiç cevap vermiyor (DNS ile engelleniyor)"
-        DNS_HIJACKED=1
-    elif [[ "$sys" != "$real" ]]; then
-        bad "$site — sistem $sys diyor, gerçeği $real (DNS yönlendirmesi)"
-        DNS_HIJACKED=1
-    else
-        ok "$site — DNS temiz ($sys)"
-    fi
+    dns_verdict "$site"; v=$?
+    case $v in
+        0) bad  "$site — sistem $(dns_system "$site") diyor, gerçek adresler arasında yok (DNS yönlendirmesi)"
+           DNS_HIJACKED=1 ;;
+        1) ok   "$site — DNS temiz ($(dns_system "$site"))" ;;
+        *) warn "$site — şifreli DNS cevap vermedi, karşılaştırma yapılamadı" ;;
+    esac
 done
 
 #
@@ -178,7 +213,7 @@ if [[ $DNS_HIJACKED -eq 1 ]]; then
 
         good=0
         for site in "${SITES[@]}"; do
-            [[ "$(dns_system "$site")" == "$(dns_doh "$site")" ]] && good=$((good+1))
+            dns_matches "$site"; [[ $? -eq 1 ]] && good=$((good+1))
         done
 
         kill -TERM "$dohpid" 2>/dev/null
@@ -252,7 +287,8 @@ if [[ $DNS_HIJACKED -eq 1 ]]; then
 
         DNS_HIJACKED=0
         for site in "${SITES[@]}"; do
-            if [[ "$(dns_system "$site")" == "$(dns_doh "$site")" ]]; then
+            dns_matches "$site"
+            if [[ $? -eq 1 ]]; then
                 ok "$site — DNS artık temiz"
             else
                 warn "$site — DNS hâlâ yönlendiriliyor"

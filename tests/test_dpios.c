@@ -144,6 +144,67 @@ static void test_tls_record_split(void)
     CHECK(memcmp(before, buf, n) != 0, "nothing actually changed");
 }
 
+/*
+ * Chromium's post-quantum key share pushes the ClientHello past 1700 bytes, so
+ * it arrives as two TCP segments and dpiOS only ever sees the first. The
+ * rewrite has to happen entirely within that first segment: same length, and
+ * the second record's header declares a length reaching into bytes the next
+ * segment already carries.
+ */
+static void test_tls_record_split_partial(void)
+{
+    uint8_t full[4096];
+
+    /* a hello far too big for one segment, with a GREASE extension to raid */
+    size_t n = dp_tls_build_fake_hello(full, sizeof(full), "discord.com", 1900);
+    CHECK(n == 1900, "setup: builder gave %zu", n);
+
+    size_t seg1 = 1400;                     /* what the kernel hands us first */
+    uint8_t buf[4096];
+    memcpy(buf, full, seg1);
+
+    size_t out = dp_tls_split_records(buf, seg1, sizeof(buf));
+    CHECK(out == seg1, "LENGTH CHANGED %zu -> %zu", seg1, out);
+    if (out != seg1)
+        return;
+
+    CHECK(buf[0] == 0x16, "first record is not a handshake record");
+    size_t r1 = ((size_t)buf[3] << 8) | buf[4];
+    CHECK(5 + r1 < seg1, "first record swallowed the segment");
+
+    size_t off2 = 5 + r1;
+    CHECK(buf[off2] == 0x16, "second record header missing");
+    size_t r2 = ((size_t)buf[off2 + 3] << 8) | buf[off2 + 4];
+
+    /* the point of the exercise: record two runs past this segment */
+    size_t here = seg1 - off2 - 5;
+    CHECK(r2 > here, "second record does not continue into the next segment "
+                     "(declared %zu, present %zu)", r2, here);
+
+    /* what the server ends up with: our segment plus the untouched remainder */
+    uint8_t asm_[4096];
+    size_t a = 0;
+    memcpy(asm_ + a, buf + 5, r1); a += r1;
+    memcpy(asm_ + a, buf + off2 + 5, here); a += here;
+    memcpy(asm_ + a, full + seg1, n - seg1); a += n - seg1;
+
+    size_t declared = ((size_t)asm_[1] << 16) | ((size_t)asm_[2] << 8) | asm_[3];
+    CHECK(declared + 4 == a, "handshake length %zu does not match the %zu bytes "
+                             "actually delivered", declared + 4, a);
+
+    /* and it must still be a ClientHello for the right host */
+    uint8_t re[4096];
+    re[0] = 0x16; re[1] = 0x03; re[2] = 0x01;
+    re[3] = (uint8_t)(a >> 8); re[4] = (uint8_t)(a & 0xff);
+    memcpy(re + 5, asm_, a);
+
+    dp_tls_info_t info;
+    CHECK(dp_tls_parse(re, a + 5, &info) && info.is_client_hello,
+          "reassembled hello no longer parses");
+    CHECK(strcmp(info.sni, "discord.com") == 0,
+          "hostname damaged: '%s'", info.sni);
+}
+
 static void test_tls_record_split_refuses(void)
 {
     uint8_t buf[2048];
@@ -411,6 +472,7 @@ int main(void)
     test_tls_padding();
     test_tls_truncated();
     test_tls_record_split();
+    test_tls_record_split_partial();
     test_tls_record_split_refuses();
     test_http_parse();
     test_http_mangle_preserves_length();

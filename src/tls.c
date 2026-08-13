@@ -133,9 +133,15 @@ static bool is_grease_ext(uint16_t t)
     return ((t & 0x0f0f) == 0x0a0a) && ((t >> 8) == (t & 0xff));
 }
 
-/* Locate the extensions block; offsets are relative to the record start. */
+/*
+ * Locate the extensions block; offsets are relative to the record start.
+ *
+ * `avail_end` is where the extensions we can actually see stop. For a hello
+ * that spills into later TCP segments that is the end of this segment, not the
+ * end of the declared block - we only ever touch an extension we hold in full.
+ */
 static bool find_extensions(const uint8_t *p, size_t len,
-                            size_t *ext_len_off, size_t *ext_total)
+                            size_t *ext_len_off, size_t *avail_end)
 {
     if (len < 45 || p[0] != TLS_REC_HANDSHAKE || p[5] != TLS_HS_CLIENT_HELLO)
         return false;
@@ -150,10 +156,13 @@ static bool find_extensions(const uint8_t *p, size_t len,
     if (i + 2 > len) return false;
 
     *ext_len_off = i;
-    *ext_total = rd16(p + i);
-    return (i + 2 + *ext_total) <= len;
+
+    size_t declared_end = i + 2 + (size_t)rd16(p + i);
+    *avail_end = declared_end < len ? declared_end : len;
+    return *avail_end > i + 2;
 }
 
+/* The record header is rewritten by the caller, so only these two move. */
 static void patch_lengths(uint8_t *p, size_t ext_len_off, size_t shrink)
 {
     /* extensions block */
@@ -166,40 +175,43 @@ static void patch_lengths(uint8_t *p, size_t ext_len_off, size_t shrink)
     p[6] = (uint8_t)((h >> 16) & 0xff);
     p[7] = (uint8_t)((h >> 8) & 0xff);
     p[8] = (uint8_t)(h & 0xff);
-
-    /* record */
-    size_t r = rd16(p + 3) - shrink;
-    p[3] = (uint8_t)(r >> 8);
-    p[4] = (uint8_t)(r & 0xff);
 }
 
 /* Free exactly `need` bytes. Returns the new payload length, or 0 on failure. */
 static size_t reclaim_bytes(uint8_t *p, size_t len, size_t need)
 {
-    size_t ext_len_off, ext_total;
-    if (!find_extensions(p, len, &ext_len_off, &ext_total))
+    size_t ext_len_off, end;
+    if (!find_extensions(p, len, &ext_len_off, &end))
         return 0;
 
     size_t start = ext_len_off + 2;
-    size_t end = start + ext_total;
 
-    /* First choice: shrink the padding extension in place. */
+    /*
+     * First choice: shrink the padding extension.
+     *
+     * It does not have to be one we hold in full. Padding is usually the last
+     * extension and on a big hello it runs off the end of this segment - that
+     * is fine. We only take bytes out of the part in front of us and drop the
+     * declared length to match, so what finally arrives is exactly `need`
+     * bytes shorter and still self-consistent.
+     */
     for (size_t i = start; i + 4 <= end; ) {
         uint16_t type = rd16(p + i);
         uint16_t elen = rd16(p + i + 2);
-        if (i + 4 + elen > end)
-            break;
+        size_t body = i + 4;
 
-        if (type == TLS_EXT_PADDING_ID && elen >= need) {
-            size_t body = i + 4;
+        if (type == TLS_EXT_PADDING_ID && elen >= need && body + need <= len) {
             uint16_t nlen = (uint16_t)(elen - need);
             p[i + 2] = (uint8_t)(nlen >> 8);
             p[i + 3] = (uint8_t)(nlen & 0xff);
-            memmove(p + body + nlen, p + body + elen, len - (body + elen));
+            memmove(p + body, p + body + need, len - (body + need));
             patch_lengths(p, ext_len_off, need);
             return len - need;
         }
-        i += 4 + elen;
+
+        if (body + elen > end)
+            break;              /* anything else has to be here in full */
+        i = body + elen;
     }
 
     /* Second choice: drop a GREASE extension whose total size is exactly
@@ -228,26 +240,52 @@ static size_t reclaim_bytes(uint8_t *p, size_t len, size_t need)
  */
 size_t dp_tls_split_records(uint8_t *buf, size_t len, size_t cap)
 {
-    if (len < 45 || buf[0] != TLS_REC_HANDSHAKE)
+    if (len < 45 || buf[0] != TLS_REC_HANDSHAKE || buf[5] != TLS_HS_CLIENT_HELLO)
         return 0;
-    if ((size_t)rd16(buf + 3) + 5 != len)
-        return 0;              /* not exactly one record, leave it alone */
+
+    size_t rec_len = rd16(buf + 3);
+
+    /*
+     * Two shapes are worth handling. The hello fits in this segment, or - and
+     * this is the common case for Chromium, whose post-quantum key share pushes
+     * the hello past 1700 bytes - the record runs on into the next segment.
+     *
+     * The second case still works, because the whole rewrite happens inside
+     * this segment: the new record header is planted here and simply declares
+     * a length that reaches into bytes the following segments already carry.
+     * Those segments are never touched, and their sequence numbers never move.
+     */
+    bool complete = (rec_len + 5 == len);
+    bool partial  = (rec_len + 5 > len);
+    if (!complete && !partial)
+        return 0;              /* more than one record already - leave it be */
 
     size_t shrunk = reclaim_bytes(buf, len, 5);
     if (shrunk == 0)
         return 0;
 
-    /* Cut inside the hostname where we can - that is the field being matched. */
+    size_t hs_here  = shrunk - 5;               /* handshake bytes in hand */
+    size_t hs_total = (size_t)rd24(buf + 6) + 4; /* whole message, post-shrink */
+
+    if (hs_here < 2 || hs_total < hs_here)
+        return 0;
+
+    /* Cut inside the hostname when it is in front of us - that is the field
+     * being matched. Otherwise cut as early as possible. */
     dp_tls_info_t info;
-    size_t hs_len = shrunk - 5;
-    size_t cut;
-    if (dp_tls_parse(buf, shrunk, &info) && info.sni_len > 1)
+    size_t cut = 1;
+    if (dp_tls_parse(buf, shrunk, &info) && info.sni_len > 1 &&
+        info.sni_offset + info.sni_len <= shrunk)
         cut = (info.sni_offset - 5) + info.sni_len / 2;
-    else
-        cut = 1;
 
     if (cut < 1) cut = 1;
-    if (cut >= hs_len) cut = hs_len - 1;
+    if (cut >= hs_here) cut = hs_here - 1;
+
+    size_t rest_here  = hs_here - cut;     /* second record bytes in this segment */
+    size_t rest_total = hs_total - cut;    /* what its header must declare */
+
+    if (rest_here < 1 || cut > 0x3fff || rest_total > 0x3fff)
+        return 0;                          /* keep both records legal */
 
     uint8_t tmp[DPIOS_MAX_PACKET / 8];
     if (len > sizeof(tmp) || len > cap)
@@ -260,10 +298,9 @@ size_t dp_tls_split_records(uint8_t *buf, size_t len, size_t cap)
     tmp[o++] = (uint8_t)(cut >> 8); tmp[o++] = (uint8_t)(cut & 0xff);
     memcpy(tmp + o, hs, cut); o += cut;
 
-    size_t rest = hs_len - cut;
     tmp[o++] = TLS_REC_HANDSHAKE; tmp[o++] = buf[1]; tmp[o++] = buf[2];
-    tmp[o++] = (uint8_t)(rest >> 8); tmp[o++] = (uint8_t)(rest & 0xff);
-    memcpy(tmp + o, hs + cut, rest); o += rest;
+    tmp[o++] = (uint8_t)(rest_total >> 8); tmp[o++] = (uint8_t)(rest_total & 0xff);
+    memcpy(tmp + o, hs + cut, rest_here); o += rest_here;
 
     if (o != len)
         return 0;              /* refuse to change the length, ever */

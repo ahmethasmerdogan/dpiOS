@@ -1,469 +1,319 @@
 # dpiOS
 
-GoodbyeDPI'ın macOS (Apple Silicon) karşılığı. DPI (Deep Packet Inspection)
-tabanlı erişim engellerini, giden TLS el sıkışmasını yeniden çerçeveleyerek,
-paketleri parçalayarak ve sahte paketler enjekte ederek aşar.
+macOS için DPI aşma aracı. Windows'taki GoodbyeDPI'ın yaptığı işi Apple
+Silicon'da yapıyor: giden bağlantıları, araya giren filtrenin ne istediğini
+anlayamayacağı şekilde yeniden biçimlendiriyor.
 
-- **Kernel extension gerektirmez.** Apple Silicon'da kext yolu pratikte kapalı;
-  dpiOS bunun yerine `pf` + `utun` + `/dev/bpf` üçlüsünü kullanıyor.
-- **Apple Developer hesabı gerektirmez.** Network Extension'a, imzaya,
-  entitlement'a ihtiyaç yok. Sadece `sudo`.
-- **GoodbyeDPI ile aynı preset numaraları** (`-1`…`-9`), aynı bayrak isimleri.
-- Tek bir C binary'si, harici bağımlılık yok. `launchd` servisi olarak kurulur.
-
-Terminal'i aç, şunu olduğu gibi yapıştır:
+Kernel extension yok, Apple Developer hesabı yok, harici bağımlılık yok. Tek
+bir C programı ve `sudo`.
 
 ```bash
 cd ~ && git clone https://github.com/ahmethasmerdogan/dpiOS.git 2>/dev/null; \
 cd ~/dpiOS && git pull && sudo bash install.sh
 ```
 
-Zaten indirdiysen de çalışır — günceller ve devam eder.
+Zaten indirdiysen de aynı komut çalışır; günceller ve devam eder.
 
 ---
 
-## İçindekiler
+## Ne yapıyor
 
-- [Engel nasıl çalışıyor](#engel-nasıl-çalışıyor)
-- [dpiOS nasıl çalışıyor](#dpios-nasıl-çalışıyor)
-- [Kurulum](#kurulum)
-- [Kullanım](#kullanım)
-- [Servis olarak çalıştırma](#servis-olarak-çalıştırma)
-- [Sorun giderme](#sorun-giderme)
-- [Sınırlar](#sınırlar)
-- [Geliştirme](#geliştirme)
+Türkiye'de bir siteye erişemiyorsan, genelde iki ayrı engel vardır ve ikisi de
+ayrı ayrı çözülmek zorundadır.
 
----
+**Birincisi DNS.** Adres sorduğunda sana sitenin gerçek adresi yerine engel
+sayfasının adresi dönüyor. "DNS'i 8.8.8.8 yap" tavsiyesi buna çare değil, çünkü
+sorgunun kendisi yolda değiştiriliyor — hangi sunucuya sorduğunun bir önemi yok.
+dpiOS bunu, sorguyu HTTPS'in içine saklayarak çözüyor.
 
-## Engel nasıl çalışıyor
+**İkincisi DPI.** Adresi doğru bulsan bile, bağlantıyı kurarken hangi siteye
+gittiğini söyleyen kısım (SNI) açıkta gidiyor; filtre onu görüp bağlantıyı
+kesiyor. dpiOS bu kısmı, filtrenin okuyamayacağı ama sunucunun sorunsuz
+anlayacağı şekilde parçalara bölüyor.
 
-Aşağıdakiler tahmin değil, bir Türk ISS'i üzerinde ölçüldü. Engel **iki ayrı
-katmanda** çalışıyor ve ikisi de aşılmadan site açılmıyor.
-
-### 1. DNS katmanı
-
-Sistem `discord.com` için engel sayfasının IP'sini döndürüyor:
-
-| kaynak | cevap |
-|--------|-------|
-| sistem çözümleyicisi | `195.175.254.2` (engel sayfası) |
-| gerçek (DoH ile) | `162.159.137.232` … |
-
-Kritik nokta: **DNS sunucusunu değiştirmek işe yaramıyor.** Sorgunun kendisi
-araya giriliyor ve bu, alan adına özel:
-
-| sorgu | `example.com` | `discord.com` |
-|-------|---------------|---------------|
-| `1.1.1.1` UDP/53 | ✅ cevap | ❌ zaman aşımı |
-| `1.1.1.1` TCP/53 | ✅ cevap | ❌ RST |
-| DoH (şifreli) | ✅ | ✅ **gerçek IP** |
-
-Büyük/küçük harf karıştırma (DNS 0x20) da denendi, filtre harfe duyarsız.
-
-Filtre ayrıca **wildcard**: var olmayan bir alt alan adı bile engel sayfasına
-gidiyor.
-
-| sorgu | sistem | gerçek |
-|-------|--------|--------|
-| `discord.com` | `195.175.254.2` | `162.159.136.232` |
-| `gateway.us-east1-b.discord.gg` | `195.175.254.2` | — |
-| `rastgele-isim.discord.gg` | `195.175.254.2` | (yok) |
-
-Bu yüzden `/etc/hosts` yetmiyor: masaüstü uygulaması çalışma anında öğrendiği
-isimleri çözüyor, statik bir dosyaya önceden yazılamaz. dpiOS bu yüzden
-**kendi şifreli DNS çözümleyicisini** çalıştırıyor (`--doh`): 127.0.0.1:53'ü
-dinliyor, sorguyu HTTPS içinde (RFC 8484) iletiyor, cevabı geri veriyor.
-Sorgu, filtrenin okuyabileceği bir biçimde hiç tele çıkmıyor.
-
-Bir de IPv6 kapısı var: ISS engelli alan adları için **uydurma bir AAAA kaydı**
-döndürüyor (ölçüldü — `discord.com`'un gerçek AAAA kaydı yok, sistem yine de
-`2a01:358:…` diyor). macOS IPv6'yı tercih ettiği için `/etc/hosts`'a yazılan
-IPv4 adresi devre dışı kalabiliyor. `install.sh` bu durumu tespit ederse ilgili
-arayüzde IPv6'yı kapatıyor; geri açmak için
-`sudo networksetup -setv6automatic "Wi-Fi"`.
-
-### 2. DPI katmanı
-
-DNS düzeltilip gerçek IP'ye bağlanıldığında bile TLS el sıkışması ~14 ms'de
-RST yiyor. Bu DPI **TCP akışını yeniden birleştirdikten sonra** inceliyor, yani
-klasik parçalama numaraları çalışmıyor:
-
-| teknik | sonuç |
-|--------|-------|
-| tek parça (kontrol) | RST |
-| TCP'de 2. bayttan bölme | RST |
-| TCP'de SNI ortasından bölme | RST |
-| SNI'ı karışık harfle yazma | RST |
-| SNI eklentisini eklenti listesinin sonuna alma | RST |
-| **TLS kayıt katmanında bölme** | **ServerHello** ✅ |
-
-Çalışan tek teknik: ClientHello'yu **iki TLS kaydına** bölmek. Bir handshake
-mesajının birden fazla kayda yayılması TLS'te geçerlidir; sadece ilk kaydı
-ayrıştıran bir denetleyici hiçbir zaman bütün ClientHello'yu göremez.
-
----
-
-## dpiOS nasıl çalışıyor
-
-GoodbyeDPI Windows'ta WinDivert sürücüsüyle paketleri çekirdek seviyesinde
-yakalar. macOS'ta WinDivert yok. dpiOS aynı işi macOS'un kendi parçalarıyla
-yapıyor:
-
-```
-  uygulama (Safari, Discord, curl…)
-        │
-        ▼
-  kernel TCP/IP yığını          ← kaynak IP burada seçilir: 192.168.1.x
-        │
-        ▼
-  pf: "route-to (utunN)"        ← sadece TCP 80/443, sadece internete giden
-        │
-        ▼
-  utun cihazı  ──────────────▶  dpios (userspace)
-                                   │  ClientHello'yu iki TLS kaydına böl
-                                   │  TCP segmentine böl, sırasını ters çevir
-                                   │  sahte paket üret (düşük TTL / bozuk checksum)
-                                   │  HTTP header'larını değiştir
-                                   ▼
-                                /dev/bpf ──▶ en0 ──▶ internet
-
-  dönüş trafiği: en0 ──▶ kernel   (dpios'a hiç uğramaz)
-```
-
-Üç tasarım kararı bu mimariyi belirliyor:
-
-**1. Varsayılan rota değiştirilmiyor.** `pf route-to` ile sadece ilgilendiğimiz
-trafik utun'a çevriliyor. Kaynak IP adresi değişmediği için NAT yazmaya gerek
-yok.
-
-**2. Dönüş trafiği bize uğramıyor.** Kernel soketi 4'lü demeti zaten tanıyor.
-Throughput için çok iyi; karşılığında gelen paketleri filtreleyemiyoruz
-(bkz. [Sınırlar](#sınırlar)).
-
-**3. Paket uzunluğu asla değişmiyor.** Kernel, o sequence numarasında tam N bayt
-gönderdiğini varsayıyor. Bir bayt eksik/fazla göndermek akışı bozar ve dönüş
-yolu bizden geçmediği için düzeltilemez. Bu kısıt iki yerde kendini gösteriyor:
-
-- `-s` (Host'tan sonraki boşluğu sil) ve `-a` (metod ile URI arasına boşluk ekle)
-  **her zaman birlikte** uygulanır — biri bir bayt alır, diğeri bir bayt verir.
-- TLS kayıt bölme ikinci kayıt için 5 bayt fazladan başlık ister. Bu 5 bayt
-  ClientHello'nun **içinden** geri kazanılır: padding eklentisi (RFC 7685)
-  küçültülerek ya da bir GREASE eklentisi (RFC 8701) atılarak. İkisi de
-  sunucunun yok saymak zorunda olduğu alanlar. Geri kazanılacak bayt yoksa
-  dpiOS bölmeyi yapmaz — paketi asla büyütmez.
-
-Paketler `/dev/bpf` üzerinden ham ethernet çerçevesi olarak gönderiliyor. Bu yol
-routing tablosunu ve pf çıkış zincirini atlıyor, dolayısıyla kendi paketlerimiz
-tekrar utun'a düşüp sonsuz döngüye girmiyor.
+Kurulum ikisini de test edip hangisinin gerektiğine kendi karar veriyor.
 
 ---
 
 ## Kurulum
 
-Gereksinim: macOS 11+, Xcode Command Line Tools (`xcode-select --install`).
-
-### Tek komut
+macOS 11 veya üstü ve Xcode Command Line Tools gerekiyor. Yoksa script zaten
+kurman gerektiğini söyleyecek (`xcode-select --install`).
 
 ```bash
-cd ~/dpiOS && git pull && sudo bash install.sh
+sudo bash install.sh
 ```
 
-Sırasıyla: derler → makineyi doğrular → engelin türünü teşhis eder (DNS mi,
-DPI mi) → hangi preset'in işe yaradığını **deneyerek** bulur → servisi kurar →
-sonucu raporlar.
+Yaptıkları sırayla:
 
-> `sudo ./install.sh` yerine `sudo bash install.sh` yazmak, dosyanın çalıştırma
-> izni bir şekilde kaybolmuşsa bile çalışmasını garantiler. `command not found`
-> alıyorsan ya `dpiOS` klasörünün içinde değilsindir ya da `git pull`
-> yapmamışsındır — yukarıdaki komut ikisini de halleder.
+1. Derler.
+2. Makinede gerekli her şeyin çalıştığını doğrular (`--check`).
+3. Engelin DNS mi DPI mi olduğunu ölçer.
+4. Hangi ayarın işe yaradığını **deneyerek** bulur — tahmin etmez.
+5. Bulduğu ayarla servisi kurar, açılışta otomatik başlasın diye.
+6. Sonucu söyler.
 
-DNS engeli tespit ederse adresleri şifreli DNS (DoH) ile kendisi çözüp
-`/etc/hosts`'a yazar. Onay ekranı, profil ya da ek servis yok. Yaptığı her
-değişiklik `sudo bash scripts/uninstall-service.sh` ile geri alınır.
-
-Kendi site listeni de verebilirsin:
+Varsayılan olarak `discord.com`'u test eder. Başka siteler için:
 
 ```bash
 sudo bash install.sh discord.com baskasite.com
 ```
 
-### Elle, adım adım
+Ne olup bittiğinin tamamı `/tmp/dpios-install.log` dosyasına yazılır. Bir yerde
+takılırsan paylaşman gereken tek şey o dosya.
 
-<details>
-<summary>install.sh'ın yaptıklarını kendin yapmak istersen</summary>
-
-**1. Derle**
+### Kaldırmak
 
 ```bash
-make
-make test          # protokol ayrıştırıcılarının birim testleri
+sudo bash scripts/uninstall-service.sh
 ```
 
-**2. Kurmadan önce makineni doğrula**
-
-```bash
-sudo ./build/dpios --check
-```
-
-Root yetkisini, varsayılan rotayı, gateway MAC adresini, utun oluşturmayı, pf
-anchor'ının erişilebilirliğini, `route-to` kuralının kabul edilip edilmediğini
-ve BPF enjeksiyonunu tek tek dener, sonra hepsini temizler. Sisteminde kalıcı
-hiçbir şey bırakmaz.
-
-**3. Dene**
-
-```bash
-sudo ./build/dpios -5 -vv
-```
-
-Başka bir terminalde bir siteye gir. `TLS ClientHello -> site.com` satırlarını
-görüyorsan motor çalışıyor. Durdurmak için `Ctrl-C`.
-
-**4. Memnunsan kur**
-
-```bash
-sudo make install          # /usr/local/bin/dpios
-```
-
-</details>
+Servisi durdurur, pf kurallarını temizler, `/etc/hosts`'a eklenenleri siler,
+kapatılmışsa IPv6'yı geri açar. `--purge` eklersen binary ve log da gider.
 
 ---
 
-## Kullanım
+## Çalışmıyorsa
 
-```bash
-sudo dpios -5                          # önerilen başlangıç
-sudo dpios -6                          # -5 yetmezse
-sudo dpios -9 --frag-sni               # en agresif
-sudo dpios -5 --blacklist hosts.txt    # sadece listedeki alan adlarına uygula
-sudo dpios -5 -vv                      # paket paket log
-```
-
-Henüz `make install` yapmadıysan `dpios` yerine `./build/dpios` yaz.
-Durdurmak için `Ctrl-C`; çalışırken `Ctrl-T` (SIGINFO) canlı istatistik basar.
-
-### Canlı panel
-
-Terminalde çalıştırdığında log seli yerine yerinde güncellenen bir panel çizer:
-
-```
-╭─ dpiOS 0.1.0 ─────────────────────────────────────────── preset -5 ╮
-│ en0 → utun5    ports 80,443    decoys on, auto-ttl                 │
-╰────────────────────────────────────────────────────────────────────╯
-
-  uptime 00:04:12   injected 1,284   errors 0
-
-  TLS        142  ████████████████████████████████████████
-  HTTP        18  █████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
-  decoys 142   fragments 320   untouched 968
-
-  recent
-    23:47:34  TLS   static.cloudflareinsights.com   split @ 2
-    23:47:34  HTTP  cdn.example.net                 split @ 2
-    23:47:34  TLS   www.example.com                 split @ 2
-
-  Ctrl-C to stop
-```
-
-Hata ve uyarı satırları panelin üstünde birikir, panel altta kalır — hiçbir log
-kaybolmaz. Panel `-v`/`-vv`, `--syslog` ve çıktı bir dosyaya/pipe'a gittiğinde
-(launchd dahil) kendiliğinden kapanır. Zorla kapatmak için `--no-ui`.
-
-### Preset'ler
-
-GoodbyeDPI ile aynı numaralandırma. TLS kayıt bölme hepsinde varsayılan olarak
-açık.
-
-| Preset | Ne yapar |
-|--------|----------|
-| `-1`…`-4` | HTTP odaklı: `Host:` header hileleri + hafif parçalama |
-| `-5` | ClientHello 2. bayttan bölünür, ters sırada, otomatik TTL'li sahte paket |
-| `-6` | `-5` gibi ama sahte paket bozuk sequence numarasıyla |
-| `-7` | `-5` gibi ama sahte paket bozuk checksum'la |
-| `-8` | `-6` + `-7` birlikte |
-| `-9` | `-8` + bölme noktası hostname'in tam ortasında |
-
-`install.sh` bunları senin ağında deneyip çalışanı seçiyor; elle seçeceksen
-`-5` ile başla.
-
-### Öne çıkan bayraklar
-
-```
-      --record-frag      ClientHello'yu iki TLS kaydına böl (varsayılan açık)
-      --no-record-frag   kapat
--e, --frag-https N       TLS ClientHello'yu N. bayttan böl (varsayılan 2)
--f, --frag-http N        HTTP isteğini N. bayttan böl
-      --frag-sni         bölmeyi hostname'in ortasında yap
-      --reverse-frag     ikinci parçayı önce gönder
-      --fake             gerçek isteğin önüne sahte istek koy
-      --auto-ttl=1-3-10  sahte paketin TTL'ini hop sayısından hesapla
-      --wrong-seq        sahte paketi pencere dışı sequence ile gönder
-      --wrong-chksum     sahte paketin TCP checksum'ını boz
-      --port 8080        ek hedef port (tekrarlanabilir)
-      --blacklist FILE   sadece bu alan adlarına dokun
-      --whitelist FILE   bu alan adlarına asla dokunma
-      --inject bpf|raw   enjeksiyon yöntemi
-      --doh              127.0.0.1:53'te şifreli DNS çözümleyici çalıştır
-      --doh-url URL      hangi çözümleyici (varsayılan cloudflare-dns.com)
-      --dry-run          tespit et ve logla, ama hiçbir şeyi değiştirme
-      --check            makineyi doğrula ve çık
-      --unload           artık kalmış pf kurallarını temizle ve çık
-```
-
-Tam liste: `dpios --help`.
-
-### Liste dosyası formatı
-
-Satır başına bir alan adı. `#` ile yorum, `0.0.0.0 host` (hosts dosyası) biçimi
-ve baştaki `*.` / `.` kabul edilir. Eşleşme alt alan adlarını kapsar:
-`example.com` girdisi `www.example.com`'u da yakalar, `notexample.com`'u
-yakalamaz.
-
-```
-# örnek
-example.com
-*.cdn.example.net
-```
-
----
-
-## Servis olarak çalıştırma
-
-`install.sh` bunu zaten yapıyor. Elle yönetmek istersen:
-
-```bash
-sudo ./scripts/install-service.sh -5              # kur (preset seçerek)
-tail -f /var/log/dpios.log                        # loglar
-sudo launchctl print system/com.dpios.daemon      # durum
-sudo ./scripts/uninstall-service.sh               # kaldır
-sudo ./scripts/uninstall-service.sh --purge       # binary + log dahil sil
-```
-
-`install-service.sh` önce `--check` çalıştırır, başarısız olursa kurulumu
-yapmaz.
-
----
-
-## Sorun giderme
-
-### Acil: ağım gitti
-
-dpiOS temizlenmeden ölürse (kill -9, panic) pf'te artık var olmayan bir utun'a
-işaret eden kural kalır ve web trafiği kaybolur. Geri almak için:
+Önce şu: **ağın tamamen gittiyse** panik yapma, tek komut geri getirir.
 
 ```bash
 sudo pfctl -a com.apple/dpios -F all
 ```
 
-Normal kapanışlarda (Ctrl-C, SIGTERM, hatta SIGSEGV) bu otomatik yapılır.
+Normalde dpiOS kapanırken bunu kendisi yapıyor — Ctrl-C, kill, hatta çökme
+durumunda bile. Bu komut sadece o da olmazsa diye duruyor.
 
-### Tablo
+Sonrası:
 
-| Belirti | Bakılacak yer |
-|---------|---------------|
-| `--check`: "anchor com.apple/* missing" | `sudo pfctl -f /etc/pf.conf` |
-| `--check`: "gateway hwaddr" hatası | Router'a `ping` atıp tekrar dene |
-| `--check`: "packet injection" hatası | `--inject raw` dene |
-| Hiçbir şey değişmiyor gibi | `sudo dpios -5 -vv` — `TLS ClientHello -> site.com` satırı görüyor musun? |
-| Motor trafiği görüyor ama site açılmıyor | Muhtemelen DNS katmanı. `install.sh` teşhis eder |
-| Site açılmıyor, DNS de temiz | Farklı preset (`-6`, `-7`, `-9`) veya `--frag-sni` |
-| VPN açıkken çalışmıyor | Beklenen: varsayılan rota utun üzerindeyse `--inject raw` gerekir |
+| Ne oluyor | Ne yap |
+|---|---|
+| `command not found` | `dpiOS` klasöründe değilsin ya da `git pull` yapmadın. En üstteki komut ikisini de halleder |
+| Site hâlâ açılmıyor | `sudo dpios -6`, sonra `-7`, sonra `-9` dene |
+| Uygulama açılmıyor ama web sürümü açılıyor | Uygulamayı ⌘Q ile tamamen kapat, öyle aç. Pencereyi kapatmak yetmez |
+| Tarayıcı bazen açıyor bazen açmıyor | `sudo dpios -5 --block-quic` — bazı siteler UDP'ye kaçıyor |
+| Hiçbir şey değişmemiş gibi | `sudo dpios -5 -vv` çalıştır; `TLS ClientHello -> site.com` satırı görüyor musun |
+| VPN açıkken bozuluyor | `--inject raw` ekle |
 
-Gerçekten ne gönderildiğini görmek için:
+Gerçekten ne gönderildiğini görmek istersen:
 
 ```bash
 sudo tcpdump -i en0 -n 'tcp port 443 and host <hedef-ip>'
 ```
 
-Bir ClientHello için iki ayrı segment (ve `--fake` açıksa fazladan bir paket)
-görmelisin.
+Tek bir bağlantı için iki ayrı paket görmen lazım.
 
 ---
 
-## Sınırlar
+## Neler çalışır
 
-GoodbyeDPI'ın bazı özellikleri bu mimariyle karşılanamıyor. Gizlemek yerine
-açıkça yazıyorum:
+Ölçtüklerim:
 
-- **`-p` / passive DPI engelleme.** Gelen paketler dpiOS'a hiç uğramıyor,
-  dolayısıyla DPI'ın gönderdiği sahte RST'yi düşüremeyiz. Bayrak kabul ediliyor
-  ama uyarı basıp yok sayılıyor.
-- **DNS engelleme** ayrı bir katman. `--doh` ile dpiOS kendi şifreli
-  çözümleyicisini çalıştırıp sistemi ona yönlendiriyor; `install.sh` DNS engeli
-  görürse bunu otomatik açıyor. Çözümleyici başlatılamazsa `/etc/hosts`
-  yöntemine düşülüyor — o da sadece sabit isimleri kapsar, uygulamalar için
-  yetmez.
-- **`-n` / ilk segment ACK'ini bekleme.** Kernel'in TCP durum makinesini
-  userspace'ten yönetmiyoruz.
-- **TLS kayıt bölme her ClientHello'da yapılamaz.** Geri kazanılacak 5 bayt
-  (padding ya da GREASE eklentisi) yoksa dpiOS bölmeyi atlar. Chromium tabanlı
-  istemciler GREASE gönderdiği için orada güvenilir çalışır.
-- **IPv6** deneysel (`--ipv6`, varsayılan kapalı).
+- **Web siteleri** — çalışıyor, hem tarayıcıda hem `curl` ile doğrulandı.
+- **Masaüstü uygulamaları** — çalışıyor. Bunlar `gateway.us-east1-b.discord.gg`
+  gibi, çalışırken öğrendikleri adresleri çözüyor; bu yüzden `/etc/hosts`'a elle
+  adres yazmak yetmiyor, gerçek bir DNS çözümleyici gerekiyor. dpiOS onu içinde
+  barındırıyor.
+- **Sesli sohbet** — engellenmiş görünmüyor. Discord'un ses sunucuları
+  `discord.media` altında ve bu alan adı ne DNS'te ne de DPI'da engelli çıktı
+  (`latency.discord.media` hem doğru adresi veriyor hem de bağlantı sorunsuz
+  kuruluyor).
+
+Çalışmayanlar ve nedenleri:
+
+- **Gelen paketleri filtreleme (`-p`).** GoodbyeDPI'ın bu özelliği burada
+  yapılamıyor: dönüş trafiği tasarım gereği dpiOS'a uğramıyor, dolayısıyla
+  filtrenin gönderdiği sahte RST paketi yakalanamıyor. Bayrağı verirsen uyarı
+  basıp yok sayar.
+- **QUIC / HTTP/3.** UDP üzerinden gittiği için TCP'yi işleyen dpiOS'a hiç
+  uğramıyor. `--block-quic` ile UDP/443'ü kapatıp tarayıcıyı TCP'ye
+  düşürebilirsin, ama bu QUIC'i sorunsuz kullanan siteleri de yavaşlatır. O
+  yüzden varsayılan olarak kapalı.
+- **Bazı ClientHello'lar.** Aşağıda anlatılan 5 baytı bulamazsa dpiOS o
+  bağlantıya dokunmuyor. Paketi asla büyütmüyor.
+- **IPv6** deneysel (`--ipv6`), varsayılan kapalı.
+
+---
+
+## Ayarlar
+
+Preset numaraları GoodbyeDPI ile aynı, alışkanlık bozulmasın diye.
+
+| | Ne yapar |
+|---|---|
+| `-1`…`-4` | HTTP odaklı, hafif. Eski usul engellere |
+| `-5` | Önerilen başlangıç. TLS kayıt bölme + parçalama + otomatik TTL'li sahte paket |
+| `-6` | Sahte paket bozuk sequence numarasıyla gider |
+| `-7` | Sahte paket bozuk checksum'la gider |
+| `-8` | `-6` ve `-7` birlikte |
+| `-9` | `-8` + bölme noktası tam alan adının ortasında |
+
+`install.sh` bunları senin bağlantında deneyip çalışanı seçtiği için normalde
+elle uğraşman gerekmiyor.
+
+Sık kullanılan bayraklar:
+
+```
+--doh              şifreli DNS çözümleyiciyi çalıştır (127.0.0.1:53)
+--record-frag      ClientHello'yu iki TLS kaydına böl (varsayılan açık)
+--frag-sni         bölmeyi alan adının tam ortasında yap
+--block-quic       UDP/443'ü kapat, tarayıcı TCP'ye düşsün
+--blacklist FILE   sadece listedeki alan adlarına dokun
+--whitelist FILE   listedekilere hiç dokunma
+--dry-run          tespit et ve logla ama hiçbir şeyi değiştirme
+--check            makineyi doğrula ve çık
+--unload           kalmış pf kurallarını temizle ve çık
+-vv                paket paket log
+```
+
+Tamamı için `dpios --help`.
+
+Liste dosyalarında satır başına bir alan adı yazılır; `#` yorum, `0.0.0.0 host`
+biçimi ve baştaki `*.` kabul edilir. `example.com` yazmak `www.example.com`'u da
+kapsar, `notexample.com`'u kapsamaz.
+
+Terminalde çalıştırdığında log seli yerine canlı bir panel çizer: kaç paket
+işlendi, hangi alan adları geçti, kaç hata oldu. `-vv` verirsen ya da servis
+olarak çalışırsa düz log'a döner.
+
+---
+
+## Nasıl çalışıyor
+
+GoodbyeDPI, Windows'ta WinDivert sürücüsüyle paketleri çekirdek seviyesinde
+yakalar. macOS'ta öyle bir sürücü yok ve Apple Silicon'da kext yazma yolu
+pratikte kapalı. dpiOS aynı işi macOS'un kendi parçalarını birleştirerek
+yapıyor:
+
+```
+  uygulama
+     │
+     ▼
+  kernel TCP/IP            ← kaynak IP burada seçilir
+     │
+     ▼
+  pf: route-to utunN       ← sadece TCP 80/443, sadece internete çıkan
+     │
+     ▼
+  utun ──────────────▶  dpios
+                          │  ClientHello'yu iki TLS kaydına böl
+                          │  TCP segmentine böl, sırayı ters çevir
+                          │  sahte paket üret
+                          ▼
+                       /dev/bpf ──▶ en0 ──▶ internet
+
+  dönüş trafiği: en0 ──▶ kernel   (dpios'a uğramaz)
+```
+
+Üç karar bu mimariyi belirliyor.
+
+**Varsayılan rota değişmiyor.** `pf route-to` sadece ilgilendiğimiz trafiği
+utun'a çeviriyor. Kaynak adres değişmediği için NAT yazmaya gerek kalmıyor.
+
+**Dönüş trafiği bize uğramıyor.** Kernel bağlantıyı zaten tanıyor. Hız için
+iyi; bedeli, gelen paketlere müdahale edememek.
+
+**Paket uzunluğu asla değişmiyor.** Kernel o sequence numarasında tam N bayt
+gönderdiğini sanıyor. Bir bayt eksik ya da fazla göndermek akışı bozar ve dönüş
+yolu bizden geçmediği için düzeltilemez. Bu kısıt kendini iki yerde gösteriyor:
+
+- `-s` (Host'tan sonraki boşluğu sil) ve `-a` (metod ile URI arasına boşluk ekle)
+  hep birlikte uygulanıyor. Biri bir bayt alıyor, öbürü bir bayt veriyor.
+- TLS kayıt bölme, ikinci kayıt için 5 bayt fazladan başlık istiyor. O 5 bayt
+  ClientHello'nun içinden geri kazanılıyor: padding eklentisi (RFC 7685)
+  küçültülüyor ya da bir GREASE eklentisi (RFC 8701) atılıyor. İkisi de
+  sunucunun yok saymak zorunda olduğu alanlar. Bulunamazsa dpiOS o bağlantıyı
+  olduğu gibi bırakıyor.
+
+Paketler `/dev/bpf` üzerinden ham ethernet çerçevesi olarak gönderiliyor. Bu yol
+routing tablosunu ve pf çıkışını atladığı için kendi ürettiğimiz paketler tekrar
+utun'a düşüp döngüye girmiyor.
+
+---
+
+## Ölçümler
+
+Buradaki her şey bir Türk ISS'i üzerinde ölçüldü.
+
+**DNS tarafı.** Sistem `discord.com` için `195.175.254.2` diyor, gerçeği
+`162.159.136.232`. Sorgu, hangi sunucuya gönderilirse gönderilsin araya
+giriliyor:
+
+| | `example.com` | `discord.com` |
+|---|---|---|
+| `1.1.1.1` UDP | cevap geliyor | zaman aşımı |
+| `1.1.1.1` TCP | cevap geliyor | RST |
+| DoH (şifreli) | cevap geliyor | gerçek adres |
+
+Filtre alan adına duyarlı ama harfe duyarsız — büyük/küçük karıştırmak işe
+yaramadı. Ayrıca wildcard: `rastgele-isim.discord.gg` gibi hiç var olmayan bir
+isim bile engel sayfasına gidiyor. Statik bir `/etc/hosts` listesinin
+uygulamaları kurtaramamasının sebebi bu.
+
+**DPI tarafı.** Adres doğru olsa bile TLS el sıkışması 14 ms'de RST yiyor.
+Denenenler:
+
+| | Sonuç |
+|---|---|
+| dokunulmamış (kontrol) | RST |
+| TCP'de 2. bayttan bölme | RST |
+| TCP'de alan adının ortasından bölme | RST |
+| alan adını karışık harfle yazma | RST |
+| SNI eklentisini listenin sonuna alma | RST |
+| **iki TLS kaydına bölme** | **ServerHello** |
+
+Yani bu filtre TCP akışını birleştirdikten sonra inceliyor; segment bölmek işe
+yaramıyor. Kayıt katmanında bölmek yarıyor, çünkü bir handshake mesajının birden
+çok kayda yayılması TLS'te geçerli ve sadece ilk kaydı ayrıştıran bir
+denetleyici bütün mesajı hiç görmüyor.
+
+Bu, dpiOS'un ürettiği baytlarla canlı olarak doğrulandı. Üç ClientHello
+biçiminin üçünde de işlenmemiş paket RST alıyor, işlenmiş paket ServerHello
+alıyor: tek segmente sığan hello, Chromium'unki gibi iki segmente taşan hello,
+ve padding eklentisi segmenti aşan hello. Üçünde de uzunluk birebir korunuyor.
 
 ---
 
 ## Geliştirme
 
-### Proje yapısı
-
 ```
-install.sh      tek komutluk kurulum + teşhis
-profiles/       isteğe bağlı şifreli DNS (DoH) yapılandırma profili
+install.sh      tek komutluk kurulum ve teşhis
 src/
   main.c        kqueue döngüsü, sinyaller, kurulum/temizlik sırası
-  cli.c         argüman ayrıştırma
+  cli.c         argümanlar
   config.c      varsayılanlar ve preset'ler
-  check.c       --check self-test
+  check.c       --check
   ui.c          canlı terminal paneli
-  utun.c        utun cihazı oluşturma (PF_SYSTEM kernel control)
-  pf.c          pf anchor'ına route-to kurallarını yükleme/temizleme
+  dns.c         şifreli DNS çözümleyici
+  utun.c        utun cihazı (PF_SYSTEM kernel control)
+  pf.c          pf kurallarını yükleme ve temizleme
   inject.c      BPF ve raw socket enjektörleri
-  netinfo.c     varsayılan rota, arayüz, ARP/NDP tablosu (sysctl PF_ROUTE)
-  monitor.c     pasif TTL gözlemcisi (--auto-ttl için)
-  dns.c         yerel DNS-over-HTTPS çözümleyici (--doh)
-  engine.c      asıl DPI bypass mantığı
-  tls.c         ClientHello ayrıştırma, TLS kayıt bölme, sahte hello üretimi
-  http.c        HTTP header ayrıştırma ve manipülasyonu
+  netinfo.c     rota, arayüz, ARP/NDP tablosu
+  monitor.c     pasif TTL gözlemcisi
+  engine.c      DPI bypass mantığı
+  tls.c         ClientHello ayrıştırma ve TLS kayıt bölme
+  http.c        HTTP header işleme
   blacklist.c   alan adı listeleri
   checksum.c    IPv4/IPv6/TCP/UDP checksum
   util.c        fork/exec yardımcıları
 tests/          birim testleri
 ```
 
-### Testler
+`make test` protokol ayrıştırıcılarını, kayıt bölmeyi, checksum kodunu ve
+listeleri gerçekten çalıştırarak test ediyor. En kritik iki invaryant orada
+kontrol ediliyor: HTTP header işleme uzunluğu değiştirmiyor, ve TLS kayıt bölme
+ya uzunluğu birebir koruyor ya da hiç dokunmuyor.
 
-```bash
-make test
-```
-
-Taşınabilir yarıyı gerçekten çalıştırarak test eder: TLS/HTTP ayrıştırıcıları,
-TLS kayıt bölme, sahte ClientHello üreteci, checksum kodu, alan adı listeleri,
-preset'ler. En kritik iki invaryant burada doğrulanıyor:
-
-- `dp_http_mangle` paket uzunluğunu değiştirmiyor
-- `dp_tls_split_records` ya uzunluğu birebir koruyor ya da hiç dokunmuyor
-
-### Linux'tan macOS'a derleme
-
-Xcode olmayan bir makinede geliştiriyorsan:
-
-```bash
-./scripts/crossbuild.sh            # arm64
-./scripts/crossbuild.sh x86_64     # intel
-```
-
-Zig'in C derleyicisi Apple'ın libSystem stub'larını ve Darwin header'larının
-çoğunu içeriyor, dolayısıyla `zig cc -target aarch64-macos` gerçek bir Mach-O
-binary üretiyor. Zig'de bulunmayan dört header (`net/if_utun.h`, `net/bpf.h`,
-`sys/sys_domain.h`, `netinet/ip6.h`) Apple'ın açık kaynak XNU deposundan
-çekiliyor — yani derleme gerçek tanımlara karşı yapılıyor.
-
-Bu bir geliştirme aracı; ürettiği binary imzasız ve gerçek donanımda test
-edilmemiş olur. Mac'te doğrudan `make` kullan.
+Mac'in yoksa `./scripts/crossbuild.sh` Linux'ta gerçek bir Mach-O binary
+üretiyor. Zig'in C derleyicisi Darwin başlıklarının çoğunu taşıyor; eksik dördü
+(`net/if_utun.h`, `net/bpf.h`, `sys/sys_domain.h`, `netinet/ip6.h`) Apple'ın
+açık kaynak XNU deposundan çekiliyor, yani derleme gerçek tanımlara karşı
+yapılıyor. Üretilen binary imzasız ve donanımda test edilmemiş olur; Mac'te
+`make` kullan.
 
 ---
 
 ## Lisans ve sorumluluk
 
-Bu araç, ağ trafiğinizin nasıl şekillendirildiğini kendi makinenizde kontrol
-etmeniz içindir. Kullandığınız ağın kurallarına uymak sizin sorumluluğunuzdadır.
+Bu araç kendi makinendeki trafiğin nasıl biçimlendiğini kontrol etmen için.
+Bağlandığın ağın kurallarına uymak sana ait.
