@@ -1,11 +1,22 @@
 # dpiOS
 
 GoodbyeDPI'ın macOS (Apple Silicon) karşılığı. DPI (Deep Packet Inspection)
-tabanlı erişim engellemelerini, giden paketleri parçalayarak ve sahte paketler
-göndererek aşar.
+tabanlı erişim engellemelerini, giden TCP paketlerini parçalayarak, sahte
+paketler enjekte ederek ve HTTP başlıklarını değiştirerek aşar.
 
-Kernel extension **gerektirmez**, Apple Developer hesabı **gerektirmez**.
-Sadece `sudo` ister.
+- **Kernel extension gerektirmez.** Apple Silicon'da kext yolu pratikte kapalı;
+  dpiOS bunun yerine `pf` + `utun` + `/dev/bpf` üçlüsünü kullanıyor.
+- **Apple Developer hesabı gerektirmez.** Network Extension'a, imzaya,
+  entitlement'a ihtiyaç yok. Sadece `sudo` ister.
+- **GoodbyeDPI ile aynı preset numaraları** (`-1`…`-9`), aynı bayrak isimleri.
+- Tek bir C binary'si, harici bağımlılık yok. `launchd` servisi olarak
+  kurulabilir.
+
+Hızlı başlangıç:
+
+```bash
+make && sudo ./build/dpios --check && sudo ./build/dpios -5
+```
 
 ---
 
@@ -54,22 +65,46 @@ kendi paketlerimiz tekrar utun'a düşüp sonsuz döngüye girmiyor.
 
 Gereksinim: macOS 11+, Xcode Command Line Tools (`xcode-select --install`).
 
+### 1. Derle
+
 ```bash
+git clone https://github.com/ahmethasmerdogan/dpiOS.git
+cd dpiOS
 make
-make test                  # protokol ayrıştırıcılarının birim testleri
+make test          # protokol ayrıştırıcılarının birim testleri
+```
+
+### 2. Kurmadan önce makineni doğrula
+
+```bash
+sudo ./build/dpios --check
+```
+
+Bu komut root yetkisini, varsayılan rotayı, gateway MAC adresini, utun
+oluşturmayı, pf anchor'ının erişilebilirliğini, `route-to` kuralının kabul
+edilip edilmediğini ve BPF enjeksiyonunu tek tek dener; sonra hepsini
+temizler. Sisteminde kalıcı hiçbir şey bırakmaz.
+
+Hepsi yeşilse devam. Kırmızı bir satır varsa aşağıdaki
+[sorun giderme](#sorun-giderme) tablosuna bak.
+
+### 3. Dene
+
+```bash
+sudo ./build/dpios -5 -vv
+```
+
+Başka bir terminalde bir siteye gir. `TLS ClientHello -> site.com` satırlarını
+görüyorsan motor çalışıyor demektir. Durdurmak için `Ctrl-C`.
+
+### 4. Memnunsan kur
+
+```bash
 sudo make install          # /usr/local/bin/dpios
 ```
 
-**İlk iş, makinenizi doğrulayın:**
-
-```bash
-sudo dpios --check
-```
-
-Bu komut sırayla root yetkisini, varsayılan rotayı, gateway MAC adresini, utun
-oluşturmayı, pf anchor'ının erişilebilirliğini, `route-to` kuralının kabul
-edilip edilmediğini ve BPF enjeksiyonunu test eder; sonra hepsini temizler.
-Çıktı yeşilse yola devam.
+Bundan sonra her yerden `sudo dpios ...` diyebilirsin. Boot'ta otomatik
+başlaması için [servis bölümüne](#servis-olarak-çalıştırma-launchd) bak.
 
 ---
 
@@ -82,6 +117,8 @@ sudo dpios -9 --frag-sni               # en agresif
 sudo dpios -5 --blacklist hosts.txt    # sadece listedeki alan adlarına uygula
 sudo dpios -5 -vv                      # paket paket log
 ```
+
+Henüz `make install` yapmadıysan `dpios` yerine `./build/dpios` yaz.
 
 Durdurmak için `Ctrl-C`. Çalışırken `Ctrl-T` (SIGINFO) canlı istatistik basar.
 
