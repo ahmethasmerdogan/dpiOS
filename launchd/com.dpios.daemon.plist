@@ -20,16 +20,11 @@
     <dict>
         <key>SuccessfulExit</key>
         <false/>
-        <key>NetworkState</key>
-        <true/>
     </dict>
 
     <!-- Back off instead of thrashing if something is wrong with the config -->
     <key>ThrottleInterval</key>
     <integer>10</integer>
-
-    <key>ProcessType</key>
-    <string>Background</string>
 
     <key>StandardOutPath</key>
     <string>/var/log/dpios.log</string>

@@ -30,16 +30,28 @@ if [[ ! -x "$BIN" ]]; then
 fi
 
 # Arguments after the script name become the daemon's arguments.
-ARGS=("$@")
+# --skip-check is ours, not the daemon's: install.sh has already run the
+# self-test and there is no point paying for it twice.
+SKIP_CHECK=0
+ARGS=()
+for a in "$@"; do
+    if [[ "$a" == "--skip-check" ]]; then
+        SKIP_CHECK=1
+    else
+        ARGS+=("$a")
+    fi
+done
 if [[ ${#ARGS[@]} -eq 0 ]]; then
     ARGS=("-5")
 fi
 
-echo "==> verifying this machine first"
-if ! "$BIN" --check; then
-    echo
-    echo "Self-test reported failures. Fix them before installing the service." >&2
-    exit 1
+if [[ $SKIP_CHECK -eq 0 ]]; then
+    echo "==> verifying this machine first"
+    if ! "$BIN" --check; then
+        echo
+        echo "Self-test reported failures. Fix them before installing the service." >&2
+        exit 1
+    fi
 fi
 
 echo "==> writing $PLIST"
@@ -73,15 +85,10 @@ HEADER
     <dict>
         <key>SuccessfulExit</key>
         <false/>
-        <key>NetworkState</key>
-        <true/>
     </dict>
 
     <key>ThrottleInterval</key>
     <integer>10</integer>
-
-    <key>ProcessType</key>
-    <string>Background</string>
 
     <key>StandardOutPath</key>
     <string>/var/log/dpios.log</string>
@@ -96,11 +103,54 @@ chown root:wheel "$PLIST"
 chmod 0644 "$PLIST"
 
 echo "==> (re)loading the daemon"
-launchctl bootout system "$PLIST" 2>/dev/null || true
-launchctl bootstrap system "$PLIST"
-launchctl enable "system/${LABEL}"
+
+# launchctl is the flakiest part of this script, so it gets handled by hand
+# rather than under `set -e`: bootstrap fails with an unhelpful "Input/output
+# error" if the label is still registered from a previous run, and the older
+# load/unload verbs still work when bootstrap does not.
+set +e
+
+launchctl bootout "system/${LABEL}" >/dev/null 2>&1
+launchctl bootout system "$PLIST"   >/dev/null 2>&1
+
+# wait for the label to actually go away before bringing it back
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    launchctl print "system/${LABEL}" >/dev/null 2>&1 || break
+    sleep 0.3
+done
+
+BOOT_ERR="$(launchctl bootstrap system "$PLIST" 2>&1)"
+BOOT_RC=$?
+
+if [[ $BOOT_RC -ne 0 ]]; then
+    echo "    bootstrap başarısız (${BOOT_RC}): ${BOOT_ERR}"
+    echo "    eski yöntem deneniyor: launchctl load"
+    LOAD_ERR="$(launchctl load -w "$PLIST" 2>&1)"
+    BOOT_RC=$?
+    [[ $BOOT_RC -ne 0 ]] && echo "    load da başarısız: ${LOAD_ERR}"
+fi
+
+launchctl enable "system/${LABEL}" >/dev/null 2>&1
+launchctl kickstart -k "system/${LABEL}" >/dev/null 2>&1
 
 sleep 1
+
+# Bootstrap can report success while the job dies immediately, so confirm the
+# service really is registered and note its last exit status if it is not.
+if ! launchctl print "system/${LABEL}" >/dev/null 2>&1; then
+    echo
+    echo "Servis kaydedilemedi." >&2
+    echo "Son loglar:" >&2
+    tail -20 /var/log/dpios.log 2>/dev/null | sed 's/^/    /' >&2
+    exit 1
+fi
+
+STATE="$(launchctl print "system/${LABEL}" 2>/dev/null \
+         | awk -F'= ' '/last exit code|state/ {print "    " $0}' | head -3)"
+[[ -n "$STATE" ]] && echo "$STATE"
+
+set -e
+
 echo
 echo "Done. dpiOS is running with: ${ARGS[*]}"
 echo

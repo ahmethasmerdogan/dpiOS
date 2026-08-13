@@ -285,9 +285,26 @@ install -d /usr/local/bin
 install -m 0755 "$BIN" /usr/local/bin/dpios
 ok "/usr/local/bin/dpios"
 
-"$REPO_DIR/scripts/install-service.sh" "-$BEST_PRESET" >/tmp/dpios-service.log 2>&1 \
-    && ok "launchd servisi kuruldu, açılışta otomatik başlayacak" \
-    || { tail -10 /tmp/dpios-service.log | sed 's/^/    /'; die "Servis kurulamadı."; }
+# Servis bir kolaylık, motorun kendisi değil. Kurulamazsa her şeyi iptal etmek
+# yerine uyarıp devam ediyoruz; dpiOS elle çalıştırıldığında yine çalışır.
+SERVICE_OK=1
+if bash "$REPO_DIR/scripts/install-service.sh" --skip-check "-$BEST_PRESET" \
+        >/tmp/dpios-service.log 2>&1; then
+    ok "launchd servisi kuruldu, açılışta otomatik başlayacak"
+else
+    SERVICE_OK=0
+    warn "launchd servisi kurulamadı. Sebep:"
+    tail -12 /tmp/dpios-service.log | sed 's/^/        /'
+    echo
+    info "Bu dpiOS'u engellemez — arka planda başlatmıyoruz, o kadar."
+    info "Elle çalıştırmak için:  sudo dpios -$BEST_PRESET"
+    info "Tam log:                /tmp/dpios-service.log"
+    # Servis yoksa da çalışsın: bu terminal kapanınca ölmemesi için nohup.
+    nohup /usr/local/bin/dpios "-$BEST_PRESET" --no-ui \
+        >/tmp/dpios-manual.log 2>&1 &
+    disown 2>/dev/null || true
+    sleep 2
+fi
 
 sleep 2
 dscacheutil -flushcache 2>/dev/null
@@ -302,13 +319,26 @@ done
 
 echo
 if [[ $final -eq ${#SITES[@]} ]]; then
-    echo "${GRN}${B}Tamam.${R} dpiOS preset -$BEST_PRESET ile çalışıyor ve açılışta başlayacak."
+    if [[ $SERVICE_OK -eq 1 ]]; then
+        echo "${GRN}${B}Tamam.${R} dpiOS preset -$BEST_PRESET ile çalışıyor ve açılışta başlayacak."
+    else
+        echo "${GRN}${B}Çalışıyor.${R} dpiOS preset -$BEST_PRESET ile açık, ama servis"
+        echo "kurulamadığı için ${B}bilgisayarı yeniden başlatınca durur${R}."
+    fi
 else
     echo "${YLW}${B}Kısmen çalışıyor.${R} ${#SITES[@]} siteden $final tanesi açıldı."
 fi
+
 echo
-echo "  ${D}loglar${R}    tail -f /var/log/dpios.log"
-echo "  ${D}durdur${R}    sudo launchctl bootout system/${LABEL}"
-echo "  ${D}kaldır${R}    sudo ./scripts/uninstall-service.sh"
+if [[ $SERVICE_OK -eq 1 ]]; then
+    echo "  ${D}loglar${R}    tail -f /var/log/dpios.log"
+    echo "  ${D}durdur${R}    sudo launchctl bootout system/${LABEL}"
+    echo "  ${D}kaldır${R}    sudo ./scripts/uninstall-service.sh"
+else
+    echo "  ${D}başlat${R}    sudo dpios -$BEST_PRESET"
+    echo "  ${D}durdur${R}    sudo pkill -x dpios"
+    echo "  ${D}servisi tekrar dene${R}"
+    echo "            sudo bash scripts/install-service.sh -$BEST_PRESET"
+fi
 echo "  ${D}acil${R}      sudo pfctl -a ${ANCHOR} -F all"
 echo
