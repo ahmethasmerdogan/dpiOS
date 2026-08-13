@@ -52,9 +52,14 @@ fi
 
 [[ $EUID -eq 0 ]] || die "Root gerekiyor. Şunu çalıştır: sudo bash install.sh"
 
+# Her şeyi bir dosyaya da yaz: bir yerde takılırsan tek dosyayı paylaşman yeter.
+TRANSCRIPT="/tmp/dpios-install.log"
+exec > >(tee "$TRANSCRIPT") 2>&1
+
 echo
 echo "${B}dpiOS kurulumu${R}"
 echo "${D}$(sw_vers -productName) $(sw_vers -productVersion) · $(uname -m)${R}"
+echo "${D}tam kayıt: ${TRANSCRIPT}${R}"
 
 # ------------------------------------------------------------------ derle --
 step "Derleniyor"
@@ -119,38 +124,134 @@ for site in "${SITES[@]}"; do
     fi
 done
 
+#
+# DNS düzeltmesi: /etc/hosts.
+#
+# Daha önce burada bir yapılandırma profili (DoH) açılıyordu, ama profil
+# kurulumu macOS'un onay ekranına bağlı ve "VPN ve Aygıt Yönetimi" altında
+# sessizce reddedilebiliyor. Onun yerine adresleri şifreli DNS ile burada,
+# kurulum sırasında çözüp doğrudan /etc/hosts'a yazıyoruz: hiçbir onay
+# ekranı, hiçbir profil, hiçbir arka plan servisi yok.
+#
+HOSTS_BEGIN="# BEGIN dpiOS"
+HOSTS_END="# END dpiOS"
+
+hosts_strip() {
+    [[ -f /etc/hosts ]] || return 0
+    grep -q "^${HOSTS_BEGIN}$" /etc/hosts 2>/dev/null || return 0
+    awk -v b="$HOSTS_BEGIN" -v e="$HOSTS_END" '
+        $0 == b { skip = 1; next }
+        $0 == e { skip = 0; next }
+        !skip   { print }
+    ' /etc/hosts > /tmp/dpios-hosts.new && cat /tmp/dpios-hosts.new > /etc/hosts
+    rm -f /tmp/dpios-hosts.new
+}
+
+# Bir alan adının bütün A kayıtlarını şifreli DNS üzerinden al
+doh_all() {
+    curl -sS --max-time 10 -H 'accept: application/dns-json' \
+        "https://cloudflare-dns.com/dns-query?name=$1&type=A" 2>/dev/null \
+        | grep -o '"data":"[0-9][0-9.]*"' | cut -d'"' -f4
+}
+
 if [[ $DNS_HIJACKED -eq 1 ]]; then
     echo
-    warn "DNS seviyesinde engel var ve dpiOS bunu çözemez — paket parçalama"
-    warn "TLS el sıkışmasına müdahale eder, DNS sorgusuna değil."
-    echo
-    info "Çözüm: şifreli DNS (DoH). Depoda hazır profil var."
-    info "Başka bir DNS sunucusu yazmak İŞE YARAMAZ; bu ISS engelli alan"
-    info "adları için sorguyu hangi sunucuya gitse de düşürüyor."
-    echo
-    PROFILE="$REPO_DIR/profiles/dpios-encrypted-dns.mobileconfig"
-    if [[ -f "$PROFILE" ]]; then
-        echo "    Profili şimdi açayım mı? (Sistem Ayarları'ndan onaylaman gerekir) [E/h] "
-        read -r -t 30 answer </dev/tty || answer="e"
-        if [[ -z "$answer" || "$answer" =~ ^[EeYy] ]]; then
-            sudo -u "${SUDO_USER:-$USER}" open "$PROFILE" 2>/dev/null \
-                && ok "Profil açıldı — Sistem Ayarları > Genel > Aygıt Yönetimi'nden onayla" \
-                || warn "Profil açılamadı. Elle: open \"$PROFILE\""
-            echo
-            echo "    Onayladıktan sonra Enter'a bas (atlamak için Ctrl-C)... "
-            read -r -t 300 _ </dev/tty || true
-            dscacheutil -flushcache 2>/dev/null
-            killall -HUP mDNSResponder 2>/dev/null
-            sleep 1
-            for site in "${SITES[@]}"; do
-                if [[ "$(dns_system "$site")" == "$(dns_doh "$site")" ]]; then
-                    ok "$site — DNS artık temiz"
-                    DNS_HIJACKED=0
-                else
-                    warn "$site — DNS hâlâ yönlendiriliyor, profil etkin değil"
-                fi
-            done
+    info "DNS engeli /etc/hosts üzerinden aşılacak: adresler şifreli DNS ile"
+    info "çözülüp doğrudan yazılıyor. Onay ekranı yok."
+
+    # Discord tek bir alan adı değil; uygulamanın çalışması için yanındaki
+    # birkaç alan adı da lazım.
+    TARGETS=("${SITES[@]}")
+    for s in "${SITES[@]}"; do
+        case "$s" in
+            *discord*)
+                TARGETS+=(discord.com discord.gg discordapp.com
+                          cdn.discordapp.com media.discordapp.net
+                          gateway.discord.gg
+                          images-ext-1.discordapp.net status.discord.com)
+                ;;
+        esac
+    done
+
+    [[ -f /etc/hosts.dpios.bak ]] || cp /etc/hosts /etc/hosts.dpios.bak 2>/dev/null
+    hosts_strip
+
+    ENTRIES=()
+    SEEN=" "
+    for host in "${TARGETS[@]}"; do
+        case "$SEEN" in *" $host "*) continue ;; esac
+        SEEN="$SEEN$host "
+        ip="$(doh_all "$host" | head -1)"
+        if [[ -n "$ip" ]]; then
+            ENTRIES+=("$ip	$host")
+            ok "$host -> $ip"
+        else
+            warn "$host — şifreli DNS cevap vermedi, atlandı"
         fi
+    done
+
+    if [[ ${#ENTRIES[@]} -gt 0 ]]; then
+        {
+            echo "$HOSTS_BEGIN"
+            echo "# dpiOS tarafından eklendi. Kaldırmak için:"
+            echo "#   sudo bash scripts/uninstall-service.sh"
+            printf '%s\n' "${ENTRIES[@]}"
+            echo "$HOSTS_END"
+        } >> /etc/hosts
+        ok "/etc/hosts güncellendi (${#ENTRIES[@]} kayıt), yedek: /etc/hosts.dpios.bak"
+
+        dscacheutil -flushcache 2>/dev/null
+        killall -HUP mDNSResponder 2>/dev/null
+        sleep 1
+
+        DNS_HIJACKED=0
+        for site in "${SITES[@]}"; do
+            if [[ "$(dns_system "$site")" == "$(dns_doh "$site")" ]]; then
+                ok "$site — DNS artık temiz"
+            else
+                warn "$site — DNS hâlâ yönlendiriliyor"
+                DNS_HIJACKED=1
+            fi
+        done
+
+        #
+        # IPv6 kapısı.
+        #
+        # Bu ISS engelli alan adları için sahte bir AAAA kaydı uyduruyor
+        # (ölçüldü: discord.com'un gerçek AAAA kaydı yok, sistem yine de
+        # 2a01:358:... döndürüyor). macOS IPv6'yı tercih ettiği için, /etc/hosts'a
+        # yazdığımız IPv4 adresi işe yaramadan trafik engel sayfasına gidebilir.
+        # Sadece gerçekten böyle bir kayıt kaldıysa müdahale ediyoruz.
+        LEFTOVER6=""
+        for site in "${SITES[@]}"; do
+            v6="$(dscacheutil -q host -a name "$site" 2>/dev/null \
+                  | awk '/^ipv6_address:/{print $2; exit}')"
+            real6="$(curl -sS --max-time 8 -H 'accept: application/dns-json' \
+                     "https://cloudflare-dns.com/dns-query?name=${site}&type=AAAA" \
+                     2>/dev/null | grep -o '"type":28' | head -1)"
+            if [[ -n "$v6" && -z "$real6" ]]; then
+                LEFTOVER6="$site"
+                break
+            fi
+        done
+
+        if [[ -n "$LEFTOVER6" ]]; then
+            warn "$LEFTOVER6 için sahte bir IPv6 kaydı dönüyor (gerçek AAAA kaydı yok)."
+            DEV6="$(route -n get default 2>/dev/null | awk '/interface:/{print $2}')"
+            SVC6="$(networksetup -listnetworkserviceorder 2>/dev/null \
+                    | grep -B1 "Device: ${DEV6})" | head -1 | sed 's/^([0-9]*) //')"
+            if [[ -n "$SVC6" ]] && networksetup -setv6off "$SVC6" 2>/dev/null; then
+                ok "IPv6 kapatıldı ($SVC6) — trafik IPv4 üzerinden gidecek"
+                info "Geri açmak için: sudo networksetup -setv6automatic \"$SVC6\""
+                dscacheutil -flushcache 2>/dev/null
+                killall -HUP mDNSResponder 2>/dev/null
+                sleep 1
+            else
+                warn "IPv6 kapatılamadı. Elle: sudo networksetup -setv6off \"Wi-Fi\""
+            fi
+        fi
+    else
+        warn "Hiçbir adres çözülemedi; şifreli DNS'e de erişilemiyor olabilir."
     fi
 fi
 

@@ -59,8 +59,15 @@ araya giriliyor ve bu, alan adına özel:
 | DoH (şifreli) | ✅ | ✅ **gerçek IP** |
 
 Büyük/küçük harf karıştırma (DNS 0x20) da denendi, filtre harfe duyarsız.
-Yani çözüm tek: **şifreli DNS**. Depoda hazır profil var, `install.sh` gerekli
-olduğunda açıyor.
+Çözüm: adresi **şifreli DNS ile çözüp** doğrudan `/etc/hosts`'a yazmak.
+`install.sh` bunu otomatik yapıyor.
+
+Bir de IPv6 kapısı var: ISS engelli alan adları için **uydurma bir AAAA kaydı**
+döndürüyor (ölçüldü — `discord.com`'un gerçek AAAA kaydı yok, sistem yine de
+`2a01:358:…` diyor). macOS IPv6'yı tercih ettiği için `/etc/hosts`'a yazılan
+IPv4 adresi devre dışı kalabiliyor. `install.sh` bu durumu tespit ederse ilgili
+arayüzde IPv6'yı kapatıyor; geri açmak için
+`sudo networksetup -setv6automatic "Wi-Fi"`.
 
 ### 2. DPI katmanı
 
@@ -157,8 +164,9 @@ sonucu raporlar.
 > alıyorsan ya `dpiOS` klasörünün içinde değilsindir ya da `git pull`
 > yapmamışsındır — yukarıdaki komut ikisini de halleder.
 
-DNS engeli tespit ederse `profiles/dpios-encrypted-dns.mobileconfig` profilini
-açar; **Sistem Ayarları → Genel → Aygıt Yönetimi**'nden onaylaman yeterli.
+DNS engeli tespit ederse adresleri şifreli DNS (DoH) ile kendisi çözüp
+`/etc/hosts`'a yazar. Onay ekranı, profil ya da ek servis yok. Yaptığı her
+değişiklik `sudo bash scripts/uninstall-service.sh` ile geri alınır.
 
 Kendi site listeni de verebilirsin:
 
@@ -366,7 +374,8 @@ açıkça yazıyorum:
   dolayısıyla DPI'ın gönderdiği sahte RST'yi düşüremeyiz. Bayrak kabul ediliyor
   ama uyarı basıp yok sayılıyor.
 - **DNS engelleme.** dpiOS TLS el sıkışmasına müdahale eder, DNS sorgusuna
-  değil. DNS katmanı için depodaki şifreli DNS profili kullanılıyor.
+  değil. DNS katmanını `install.sh` `/etc/hosts` üzerinden çözüyor. Bu statik
+  bir çözüm: alan adının IP'si değişirse kurulumu tekrar çalıştırmak gerekir.
 - **`-n` / ilk segment ACK'ini bekleme.** Kernel'in TCP durum makinesini
   userspace'ten yönetmiyoruz.
 - **TLS kayıt bölme her ClientHello'da yapılamaz.** Geri kazanılacak 5 bayt
@@ -382,7 +391,7 @@ açıkça yazıyorum:
 
 ```
 install.sh      tek komutluk kurulum + teşhis
-profiles/       şifreli DNS (DoH) yapılandırma profili
+profiles/       isteğe bağlı şifreli DNS (DoH) yapılandırma profili
 src/
   main.c        kqueue döngüsü, sinyaller, kurulum/temizlik sırası
   cli.c         argüman ayrıştırma
