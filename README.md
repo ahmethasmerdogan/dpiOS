@@ -11,11 +11,14 @@ paketleri parçalayarak ve sahte paketler enjekte ederek aşar.
 - **GoodbyeDPI ile aynı preset numaraları** (`-1`…`-9`), aynı bayrak isimleri.
 - Tek bir C binary'si, harici bağımlılık yok. `launchd` servisi olarak kurulur.
 
+Terminal'i aç, şunu olduğu gibi yapıştır:
+
 ```bash
-git clone https://github.com/ahmethasmerdogan/dpiOS.git
-cd dpiOS
-sudo ./install.sh
+cd ~ && git clone https://github.com/ahmethasmerdogan/dpiOS.git 2>/dev/null; \
+cd ~/dpiOS && git pull && sudo bash install.sh
 ```
+
+Zaten indirdiysen de çalışır — günceller ve devam eder.
 
 ---
 
@@ -142,12 +145,17 @@ Gereksinim: macOS 11+, Xcode Command Line Tools (`xcode-select --install`).
 ### Tek komut
 
 ```bash
-sudo ./install.sh
+cd ~/dpiOS && git pull && sudo bash install.sh
 ```
 
 Sırasıyla: derler → makineyi doğrular → engelin türünü teşhis eder (DNS mi,
 DPI mi) → hangi preset'in işe yaradığını **deneyerek** bulur → servisi kurar →
 sonucu raporlar.
+
+> `sudo ./install.sh` yerine `sudo bash install.sh` yazmak, dosyanın çalıştırma
+> izni bir şekilde kaybolmuşsa bile çalışmasını garantiler. `command not found`
+> alıyorsan ya `dpiOS` klasörünün içinde değilsindir ya da `git pull`
+> yapmamışsındır — yukarıdaki komut ikisini de halleder.
 
 DNS engeli tespit ederse `profiles/dpios-encrypted-dns.mobileconfig` profilini
 açar; **Sistem Ayarları → Genel → Aygıt Yönetimi**'nden onaylaman yeterli.
@@ -155,7 +163,7 @@ açar; **Sistem Ayarları → Genel → Aygıt Yönetimi**'nden onaylaman yeterl
 Kendi site listeni de verebilirsin:
 
 ```bash
-sudo ./install.sh discord.com baskasite.com
+sudo bash install.sh discord.com baskasite.com
 ```
 
 ### Elle, adım adım

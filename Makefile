@@ -2,8 +2,11 @@
 
 CC      ?= clang
 PREFIX  ?= /usr/local
-ARCHS   ?= -arch arm64
 MIN_OS  ?= 11.0
+
+# Build for whatever this machine is. Hardcoding arm64 here would silently
+# produce a binary an Intel Mac cannot run. Use the `universal` target for both.
+ARCHS   ?=
 
 CFLAGS  += -std=c11 -O2 -g -Wall -Wextra -Wno-unused-parameter \
            -fno-omit-frame-pointer \
@@ -24,9 +27,13 @@ TESTSRC := tests/test_dpios.c $(SRCDIR)/tls.c $(SRCDIR)/http.c \
            $(SRCDIR)/checksum.c $(SRCDIR)/blacklist.c $(SRCDIR)/config.c \
            $(SRCDIR)/log.c
 
-.PHONY: all clean install uninstall universal check test cross
+.PHONY: all clean install uninstall universal check test cross setup
 
 all: $(BIN)
+
+# one-shot: build, diagnose, pick a preset, install the service
+setup:
+	@sudo bash ./install.sh
 
 $(BIN): $(OBJECTS)
 	$(CC) $(LDFLAGS) -o $@ $^

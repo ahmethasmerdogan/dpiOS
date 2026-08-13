@@ -42,7 +42,15 @@ die()   { echo; echo "${RED}${B}Durduruldu:${R} $*"; exit 1; }
 
 # ------------------------------------------------------------- ön kontrol --
 [[ "$(uname -s)" == "Darwin" ]] || die "Bu script sadece macOS içindir."
-[[ $EUID -eq 0 ]] || die "Root gerekiyor. Şunu çalıştır: sudo ./install.sh"
+
+# Klasör kontrolü root kontrolünden önce: sudo unutulmuş olsa bile kullanıcı
+# önce asıl sorunu görsün.
+if [[ ! -f "$REPO_DIR/Makefile" || ! -d "$REPO_DIR/src" ]]; then
+    die "Bu script dpiOS klasörünün içinden çalıştırılmalı.
+    cd ~/dpiOS && sudo bash install.sh"
+fi
+
+[[ $EUID -eq 0 ]] || die "Root gerekiyor. Şunu çalıştır: sudo bash install.sh"
 
 echo
 echo "${B}dpiOS kurulumu${R}"
