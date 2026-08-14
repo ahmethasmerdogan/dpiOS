@@ -46,6 +46,7 @@ static int         s_width = UI_MAX_W;
 static time_t      s_start = 0;
 static ui_event_t  s_events[UI_EVENTS];
 static int         s_ev_head = 0;
+static unsigned    s_frame = 0;      /* heartbeat, so the panel looks alive */
 static char        s_head_l[128];
 static char        s_head_r[64];
 static char        s_sub[192];
@@ -159,16 +160,30 @@ static void draw_panel(void)
     s_lines = 4;
 
     /* ---- counters ---- */
+    static const char *pulse[] = { "\u280b", "\u2819", "\u2839", "\u2838",
+                                   "\u283c", "\u2834", "\u2826", "\u2827",
+                                   "\u2807", "\u280f" };
     char n1[32], n2[32];
     long up = (long)(time(NULL) - s_start);
-    printf("  %suptime%s %02ld:%02ld:%02ld   %sinjected%s %s   %serrors%s %s%s%s\n\n",
+    printf("  %s%s%s %suptime%s %02ld:%02ld:%02ld   %sinjected%s %s   "
+           "%serrors%s %s%s%s\n",
+           C_CYAN, pulse[s_frame % 10], C_RESET,
            C_DIM, C_RESET, up / 3600, (up / 60) % 60, up % 60,
            C_DIM, C_RESET, fmt_num(dp_inject_count(), n1, sizeof(n1)),
            C_DIM, C_RESET,
            dp_inject_errors() ? C_RED : "",
            fmt_num(dp_inject_errors(), n2, sizeof(n2)),
            dp_inject_errors() ? C_RESET : "");
-    s_lines += 2;
+    s_lines += 1;
+
+    if (dp_dns_active()) {
+        char n0[32];
+        printf("  %sencrypted dns%s %s answered\n",
+               C_DIM, C_RESET, fmt_num(dp_dns_queries(), n0, sizeof(n0)));
+        s_lines += 1;
+    }
+    printf("\n");
+    s_lines += 1;
 
     /* ---- traffic bars ---- */
     uint64_t scale = g_stats.tls_hits > g_stats.http_hits
@@ -255,8 +270,10 @@ bool dp_ui_start(const dp_config_t *c, const dp_netinfo_t *ni,
         n += (size_t)snprintf(ports + n, sizeof(ports) - n, "%s%u",
                               i ? "," : "", (unsigned)c->ports[i]);
 
-    snprintf(s_sub, sizeof(s_sub), "%s → %s    ports %s    decoys %s",
+    snprintf(s_sub, sizeof(s_sub),
+             "%s → %s    ports %s    records %s    decoys %s",
              ni->egress.name, t->name, ports,
+             c->record_frag ? "split" : "intact",
              c->fake_enable ? (c->auto_ttl ? "on, auto-ttl" : "on") : "off");
 
     memset(s_events, 0, sizeof(s_events));
@@ -274,6 +291,7 @@ void dp_ui_tick(void)
 {
     if (!s_active)
         return;
+    s_frame++;
     erase_panel();
     draw_panel();
 }

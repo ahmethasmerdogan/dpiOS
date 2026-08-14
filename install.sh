@@ -26,19 +26,95 @@ fi
 CONTROL_SITE="example.com"   # her zaman açık olmalı, ölçüm referansı
 
 # ---------------------------------------------------------------- görünüm --
-if [[ -t 1 ]]; then
+#
+# Animasyonlar gerçek terminale (fd 3) gider, log dosyasına değil. Böylece
+# ekranda dönen spinner'ı görürsün ama /tmp/dpios-install.log içinde
+# \r karakterlerinden oluşan bir çöp yığını olmaz.
+#
+# UTF-8 yoksa ${#dizge} karakter değil bayt sayar ve kutular şaşar.
+export LC_ALL="${LC_ALL:-en_US.UTF-8}"
+
+TTY=0; [[ -t 1 ]] && TTY=1
+
+if [[ $TTY -eq 1 ]]; then
     R=$'\033[0m'; B=$'\033[1m'; D=$'\033[2m'
     GRN=$'\033[32m'; YLW=$'\033[33m'; RED=$'\033[31m'; CYN=$'\033[36m'
+    MAG=$'\033[35m'
 else
-    R=""; B=""; D=""; GRN=""; YLW=""; RED=""; CYN=""
+    R=""; B=""; D=""; GRN=""; YLW=""; RED=""; CYN=""; MAG=""
 fi
 
-step()  { echo; echo "${CYN}${B}==>${R} ${B}$*${R}"; }
+WIDTH=68
+STEP_NO=0
+STEP_TOTAL=6
+SPIN_PID=""
+SPIN=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+
+hr()   { local i s=""; for ((i=0;i<WIDTH;i++)); do s="$s─"; done; printf '%s' "$s"; }
+pad()  { local n=$1 i s=""; for ((i=0;i<n;i++)); do s="$s "; done; printf '%s' "$s"; }
+
+# görünen kolon sayısı (UTF-8 baytları değil)
+cols() { printf '%s' "$1" | awk '{n=0; for(i=1;i<=length($0);i++) n++; print n}'; }
+
+# Dolguyu elle sayıyoruz: printf'in %-*s alan genişliği baytla ölçer, biz
+# görünen kolonu istiyoruz.
+box() {  # box "başlık" "alt satır"
+    local t="$1" s="$2" inner=$((WIDTH-2))
+    printf '%s╭%s╮%s\n' "$CYN" "$(hr)" "$R"
+    printf '%s│%s %s%s%s%s %s│%s\n' "$CYN" "$R" "$B" "$t" "$R" \
+           "$(pad $((inner-${#t})))" "$CYN" "$R"
+    if [[ -n "$s" ]]; then
+        printf '%s│%s %s%s%s%s %s│%s\n' "$CYN" "$R" "$D" "$s" "$R" \
+               "$(pad $((inner-${#s})))" "$CYN" "$R"
+    fi
+    printf '%s╰%s╯%s\n' "$CYN" "$(hr)" "$R"
+}
+
+step()  { STEP_NO=$((STEP_NO+1))
+          echo
+          printf '%s%s[%d/%d]%s %s%s%s\n' "$MAG" "$B" "$STEP_NO" "$STEP_TOTAL" \
+                 "$R" "$B" "$*" "$R"; }
 ok()    { echo "    ${GRN}✓${R} $*"; }
 warn()  { echo "    ${YLW}!${R} $*"; }
 bad()   { echo "    ${RED}✗${R} $*"; }
 info()  { echo "    ${D}$*${R}"; }
-die()   { echo; echo "${RED}${B}Durduruldu:${R} $*"; exit 1; }
+
+spin_start() {
+    [[ $TTY -eq 1 ]] || { info "$1..."; return; }
+    (
+        trap 'exit 0' TERM
+        local i=0
+        while :; do
+            printf '\r    %s%s%s %s' "$CYN" "${SPIN[i%10]}" "$R" "$1" >&3
+            i=$((i+1))
+            sleep 0.08
+        done
+    ) &
+    SPIN_PID=$!
+}
+
+spin_stop() {
+    [[ -n "$SPIN_PID" ]] || return 0
+    kill "$SPIN_PID" 2>/dev/null
+    wait "$SPIN_PID" 2>/dev/null
+    SPIN_PID=""
+    printf '\r\033[2K' >&3
+}
+
+bar() {  # bar mevcut toplam "mesaj"
+    [[ $TTY -eq 1 ]] || return 0
+    local cur=$1 tot=$2 msg=$3 w=22 i f=0
+    [[ $tot -gt 0 ]] && f=$(( cur * w / tot ))
+    local s=""
+    for ((i=0;i<w;i++)); do
+        if [[ $i -lt $f ]]; then s="$s█"; else s="$s░"; fi
+    done
+    printf '\r    %s%s%s  %s' "$CYN" "$s" "$R" "$msg" >&3
+}
+bar_done() { [[ $TTY -eq 1 ]] && printf '\r\033[2K' >&3; return 0; }
+
+die()   { spin_stop; echo; echo "${RED}${B}Durduruldu:${R} $*"; exit 1; }
+trap 'spin_stop' EXIT INT TERM
 
 # ------------------------------------------------------------- ön kontrol --
 [[ "$(uname -s)" == "Darwin" ]] || die "Bu script sadece macOS içindir."
@@ -53,24 +129,29 @@ fi
 [[ $EUID -eq 0 ]] || die "Root gerekiyor. Şunu çalıştır: sudo bash install.sh"
 
 # Her şeyi bir dosyaya da yaz: bir yerde takılırsan tek dosyayı paylaşman yeter.
+# fd 3 gerçek terminale bakar; spinner oraya yazılır, log temiz kalır.
 TRANSCRIPT="/tmp/dpios-install.log"
+exec 3>&1
 exec > >(tee "$TRANSCRIPT") 2>&1
 
 echo
-echo "${B}dpiOS kurulumu${R}"
-echo "${D}$(sw_vers -productName) $(sw_vers -productVersion) · $(uname -m)${R}"
-echo "${D}tam kayıt: ${TRANSCRIPT}${R}"
+box "dpiOS  ·  DPI aşma aracı" \
+    "$(sw_vers -productName) $(sw_vers -productVersion) · $(uname -m) · kayıt: $TRANSCRIPT"
 
 # ------------------------------------------------------------------ derle --
 step "Derleniyor"
 if ! xcode-select -p >/dev/null 2>&1; then
     die "Xcode Command Line Tools kurulu değil. Şunu çalıştır: xcode-select --install"
 fi
-if ! make -C "$REPO_DIR" >/tmp/dpios-build.log 2>&1; then
+spin_start "kaynak derleniyor"
+make -C "$REPO_DIR" >/tmp/dpios-build.log 2>&1
+MAKE_RC=$?
+spin_stop
+if [[ $MAKE_RC -ne 0 ]]; then
     tail -25 /tmp/dpios-build.log
     die "Derleme başarısız. Tam log: /tmp/dpios-build.log"
 fi
-ok "build/dpios hazır"
+ok "build/dpios hazır ($(cd "$REPO_DIR" && git rev-parse --short HEAD 2>/dev/null || echo yerel))"
 
 # --------------------------------------------------- çalışan örneği durdur --
 launchctl bootout "system/${LABEL}" 2>/dev/null
@@ -80,8 +161,10 @@ pfctl -a "$ANCHOR" -F all >/dev/null 2>&1
 
 # ------------------------------------------------------- makineyi doğrula --
 step "Makine doğrulanıyor"
+spin_start "utun, pf ve BPF deneniyor"
 CHECK_OUT="$("$BIN" --check 2>&1)"
 CHECK_RC=$?
+spin_stop
 echo "$CHECK_OUT" | sed 's/^/    /'
 if [[ $CHECK_RC -ne 0 ]]; then
     echo
@@ -150,7 +233,9 @@ dns_verdict() {
 
 DNS_HIJACKED=0
 for site in "${SITES[@]}"; do
+    spin_start "$site sorgulanıyor"
     dns_verdict "$site"; v=$?
+    spin_stop
     case $v in
         0) bad  "$site — sistem $(dns_system "$site") diyor, gerçek adresler arasında yok (DNS yönlendirmesi)"
            DNS_HIJACKED=1 ;;
@@ -202,9 +287,11 @@ DOH_ARGS=""
 if [[ $DNS_HIJACKED -eq 1 ]]; then
     echo
     step "Şifreli DNS deneniyor"
+    spin_start "çözümleyici başlatılıyor"
     "$BIN" -5 --doh --no-ui >/tmp/dpios-doh.log 2>&1 &
     dohpid=$!
     sleep 3
+    spin_stop
 
     if kill -0 "$dohpid" 2>/dev/null; then
         dscacheutil -flushcache 2>/dev/null
@@ -384,7 +471,9 @@ score_sites() {   # kaç site açıldı
 step "Önce dpiOS olmadan ölçüm"
 BASELINE=0
 for site in "${SITES[@]}"; do
+    spin_start "$site deneniyor"
     res="$(probe "$site")"
+    spin_stop
     [[ "$res" == acik:* ]] && BASELINE=$((BASELINE+1))
     echo "    $site: $(describe "$res")"
 done
@@ -403,13 +492,16 @@ if [[ $BASELINE -eq ${#SITES[@]} ]]; then
 fi
 
 # ---------------------------------------------------- preset'i deneyerek bul
-step "Hangi preset işe yarıyor, deneniyor"
-info "Her preset için dpiOS kısa süre çalıştırılıp siteler tekrar denenecek."
+step "Hangi ayar işe yarıyor, deneniyor"
+info "Her ayar için dpiOS kısa süre çalıştırılıp siteler tekrar denenecek."
+PTOTAL=${#PRESETS[@]}
+PDONE=0
 
 BEST_PRESET=""
 BEST_SCORE=$BASELINE
 
 for p in "${PRESETS[@]}"; do
+    bar $PDONE $PTOTAL "preset -$p deneniyor"
     "$BIN" "-$p" $DOH_ARGS --no-ui >/tmp/dpios-try.log 2>&1 &
     dpid=$!
     sleep 2
@@ -422,6 +514,8 @@ for p in "${PRESETS[@]}"; do
 
     dscacheutil -flushcache 2>/dev/null
     n="$(score_sites)"
+    PDONE=$((PDONE+1))
+    bar $PDONE $PTOTAL "preset -$p denendi"
 
     kill -TERM "$dpid" 2>/dev/null
     wait "$dpid" 2>/dev/null
@@ -431,6 +525,7 @@ for p in "${PRESETS[@]}"; do
     seen="$(grep -o 'tls [0-9]*' /tmp/dpios-try.log | tail -1 | awk '{print $2}')"
     seen="${seen:-0}"
 
+    bar_done
     if [[ $n -gt $BEST_SCORE ]]; then
         ok "preset -$p → ${#SITES[@]} siteden $n tanesi açıldı ${D}(motor $seen TLS isteği işledi)${R}"
         BEST_SCORE=$n
@@ -464,6 +559,7 @@ if [[ -z "$BEST_PRESET" ]]; then
 fi
 
 step "Kuruluyor (preset -$BEST_PRESET)"
+spin_start "binary ve servis yerleştiriliyor"
 install -d /usr/local/bin
 install -m 0755 "$BIN" /usr/local/bin/dpios
 ok "/usr/local/bin/dpios"
@@ -473,8 +569,10 @@ ok "/usr/local/bin/dpios"
 SERVICE_OK=1
 if bash "$REPO_DIR/scripts/install-service.sh" --skip-check \
         "-$BEST_PRESET" $DOH_ARGS >/tmp/dpios-service.log 2>&1; then
+    spin_stop
     ok "launchd servisi kuruldu, açılışta otomatik başlayacak"
 else
+    spin_stop
     SERVICE_OK=0
     warn "launchd servisi kurulamadı. Sebep:"
     tail -12 /tmp/dpios-service.log | sed 's/^/        /'
@@ -495,7 +593,9 @@ dscacheutil -flushcache 2>/dev/null
 step "Son durum"
 final=0
 for site in "${SITES[@]}"; do
+    spin_start "$site tekrar deneniyor"
     res="$(probe "$site")"
+    spin_stop
     [[ "$res" == acik:* ]] && final=$((final+1))
     echo "    $site: $(describe "$res")"
 done

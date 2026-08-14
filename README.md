@@ -53,6 +53,32 @@ Yaptıkları sırayla:
 5. Bulduğu ayarla servisi kurar, açılışta otomatik başlasın diye.
 6. Sonucu söyler.
 
+Ekranda şuna benzer bir şey görürsün — her adım kendi sırasında, uzun sürenlerin
+yanında dönen bir gösterge:
+
+```
+╭────────────────────────────────────────────────────────────────────╮
+│ dpiOS  ·  DPI aşma aracı                                           │
+│ macOS 15.5 · arm64 · kayıt: /tmp/dpios-install.log                 │
+╰────────────────────────────────────────────────────────────────────╯
+
+[1/6] Derleniyor
+    ✓ build/dpios hazır (028c4c5)
+
+[2/6] Makine doğrulanıyor
+    ✓ egress arayüzü en0
+    ✓ pf route-to kuralları kabul edildi
+
+[3/6] Engelin türü tespit ediliyor
+    ✗ discord.com — sistem 195.175.254.2 diyor, gerçek adresler arasında yok
+
+[4/6] Şifreli DNS deneniyor
+    ✓ şifreli DNS çalışıyor — alt alan adları da kapsanıyor
+
+[5/6] Hangi ayar işe yarıyor, deneniyor
+    ████████████░░░░░░░░░░  preset -6 deneniyor
+```
+
 Varsayılan olarak `discord.com`'u test eder. Başka siteler için:
 
 ```bash
