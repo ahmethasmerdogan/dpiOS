@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 ahmethasmerdogan
 #
 # Build dpiOS for macOS from a non-macOS host.
 #

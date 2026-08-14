@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 ahmethasmerdogan
+ */
 /*
  * --check walks every macOS-specific mechanism dpiOS depends on and reports
  * which ones work on this machine. Everything it creates is torn down again

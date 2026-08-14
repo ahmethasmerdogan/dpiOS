@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 ahmethasmerdogan
 #
 # Remove the dpiOS launchd daemon and make sure no pf rules are left behind.
 #

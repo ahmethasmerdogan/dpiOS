@@ -1,0 +1,10 @@
+dpiOS
+Copyright 2026 ahmethasmerdogan
+
+Bu ürün, Apache Lisansı 2.0 altında dağıtılmaktadır. Lisans metni için
+LICENSE dosyasına bakınız.
+
+dpiOS, Windows için geliştirilen GoodbyeDPI projesinden (ValdikSS,
+Apache-2.0) kavramsal olarak esinlenmiştir. Komut satırı seçenekleri ve
+preset numaralandırması alışkanlığı korumak amacıyla benzer tutulmuştur.
+Kod paylaşılmamıştır; bu depodaki uygulama macOS için sıfırdan yazılmıştır.

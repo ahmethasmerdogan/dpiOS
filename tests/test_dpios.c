@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 ahmethasmerdogan
+ */
 /*
  * Unit tests for the portable half of dpiOS: the protocol parsers, the decoy
  * builders, the checksum code and the hostname lists. These are the parts that

@@ -18,7 +18,7 @@ Depo daha önce indirilmişse aynı komut güncelleyip devam eder.
 > ağda, hangi amaçla ve hangi mevzuata tabi olarak kullanıldığının hukuki
 > sorumluluğu tamamen kullanıcıya aittir. Belgelerde yer alan alan adları
 > teknik ölçüm örnekleridir; herhangi bir kullanım önerisi veya yönlendirmesi
-> içermez. Ayrıntı için [Sorumluluk](#sorumluluk) bölümüne bakınız.
+> içermez. Ayrıntı için [Lisans ve sorumluluk](#lisans-ve-sorumluluk) bölümüne bakınız.
 
 ---
 
@@ -32,7 +32,7 @@ Depo daha önce indirilmişse aynı komut güncelleyip devam eder.
 - [Mimari](#mimari)
 - [Ölçüm sonuçları](#ölçüm-sonuçları)
 - [Geliştirme](#geliştirme)
-- [Sorumluluk](#sorumluluk)
+- [Lisans ve sorumluluk](#lisans-ve-sorumluluk)
 
 ---
 
@@ -396,7 +396,7 @@ sınanmamıştır; macOS üzerinde `make` kullanılmalıdır.
 
 ---
 
-## Sorumluluk
+## Lisans ve sorumluluk
 
 dpiOS, kullanıcının kendi cihazındaki ağ trafiğinin nasıl biçimlendiğini
 inceleyip denetlemesi amacıyla geliştirilmiş bir teşhis ve paket işleme
@@ -414,5 +414,18 @@ aracıdır.
 - Yazılım olduğu gibi sunulur. Belirli bir amaca uygunluk dahil olmak üzere
   hiçbir garanti verilmez.
 
-Depoya henüz bir açık kaynak lisansı eklenmemiştir; bu durumda telif hakları
-saklıdır. Lisans tercihi belirlendiğinde bu bölüm güncellenecektir.
+### Lisans
+
+dpiOS **Apache Lisansı 2.0** ile dağıtılmaktadır. Tam metin [LICENSE](LICENSE)
+dosyasındadır; kaynak dosyalar `SPDX-License-Identifier: Apache-2.0` başlığı
+taşır.
+
+Apache 2.0 bu proje için üç nedenle seçilmiştir: aynı alandaki GoodbyeDPI ve
+SpoofDPI'ın kullandığı lisanstır, açık bir patent hakkı devri içerir ve
+yukarıdaki sorumluluk çerçevesini destekleyen ayrıntılı garanti reddi ile
+sorumluluk sınırlaması maddelerine sahiptir.
+
+dpiOS, GoodbyeDPI'dan kavramsal olarak esinlenmiştir; komut satırı seçenekleri
+ve preset numaralandırması alışkanlığı korumak amacıyla benzer tutulmuştur.
+Kod paylaşılmamış, macOS uygulaması sıfırdan yazılmıştır. Ayrıntı için
+[NOTICE](NOTICE) dosyasına bakınız.

@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * Copyright 2026 ahmethasmerdogan
+ */
 /*
  * dpiOS - GoodbyeDPI-style DPI circumvention for macOS (Apple Silicon)
  *
