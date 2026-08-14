@@ -126,7 +126,7 @@ if [[ ! -f "$REPO_DIR/Makefile" || ! -d "$REPO_DIR/src" ]]; then
     cd ~/dpiOS && sudo bash install.sh"
 fi
 
-[[ $EUID -eq 0 ]] || die "Root gerekiyor. Şunu çalıştır: sudo bash install.sh"
+[[ $EUID -eq 0 ]] || die "Root yetkisi gerekiyor: sudo bash install.sh"
 
 # Her şeyi bir dosyaya da yaz: bir yerde takılırsan tek dosyayı paylaşman yeter.
 # fd 3 gerçek terminale bakar; spinner oraya yazılır, log temiz kalır.
@@ -141,7 +141,7 @@ box "dpiOS  ·  DPI aşma aracı" \
 # ------------------------------------------------------------------ derle --
 step "Derleniyor"
 if ! xcode-select -p >/dev/null 2>&1; then
-    die "Xcode Command Line Tools kurulu değil. Şunu çalıştır: xcode-select --install"
+    die "Xcode Command Line Tools kurulu değil: xcode-select --install"
 fi
 spin_start "kaynak derleniyor"
 make -C "$REPO_DIR" >/tmp/dpios-build.log 2>&1
@@ -169,12 +169,12 @@ echo "$CHECK_OUT" | sed 's/^/    /'
 if [[ $CHECK_RC -ne 0 ]]; then
     echo
     if echo "$CHECK_OUT" | grep -q "anchor com.apple"; then
-        info "Denenecek: sudo pfctl -f /etc/pf.conf"
+        info "Önerilen: sudo pfctl -f /etc/pf.conf"
     fi
     if echo "$CHECK_OUT" | grep -q "gateway hwaddr"; then
-        info "Denenecek: ping -c2 \$(route -n get default | awk '/gateway/{print \$2}')"
+        info "Önerilen: ping -c2 \$(route -n get default | awk '/gateway/{print \$2}')"
     fi
-    die "Self-test başarısız. Yukarıdaki FAIL satırlarını düzeltmeden devam edemeyiz."
+    die "Self-test başarısız. Yukarıdaki FAIL satırları giderilmeden devam edilemez."
 fi
 
 # ------------------------------------------------------------ DNS teşhisi --
@@ -309,7 +309,7 @@ if [[ $DNS_HIJACKED -eq 1 ]]; then
 
         if [[ $good -eq ${#SITES[@]} ]]; then
             ok "şifreli DNS çalışıyor — alt alan adları da kapsanıyor"
-            info "masaüstü uygulamaları da bunu kullanacak"
+            info "masaüstü uygulamaları da bu çözümleyiciyi kullanır"
             DOH_ARGS="--doh"
             DNS_HIJACKED=0
         else
@@ -416,7 +416,7 @@ if [[ $DNS_HIJACKED -eq 1 ]]; then
                 killall -HUP mDNSResponder 2>/dev/null
                 sleep 1
             else
-                warn "IPv6 kapatılamadı. Elle: sudo networksetup -setv6off \"Wi-Fi\""
+                warn "IPv6 kapatılamadı. Elle uygulanabilir: sudo networksetup -setv6off \"Wi-Fi\""
             fi
         fi
     else
@@ -486,7 +486,7 @@ fi
 if [[ $BASELINE -eq ${#SITES[@]} ]]; then
     echo
     ok "Bütün siteler dpiOS olmadan zaten açılıyor."
-    info "Test edecek bir engel yok. Yine de kurmak istersen:"
+    info "Müdahale gerektiren bir engel yok. Yine de kurmak için:"
     info "  sudo ./scripts/install-service.sh -5"
     exit 0
 fi
@@ -545,7 +545,7 @@ if [[ -z "$BEST_PRESET" ]]; then
     last_seen="$(grep -o 'tls [0-9]*' /tmp/dpios-try.log | tail -1 | awk '{print $2}')"
     if [[ -z "$last_seen" || "$last_seen" == "0" ]]; then
         bad "Motor hiç TLS isteği görmedi — trafik dpiOS'a hiç uğramıyor."
-        info "Yani pf yönlendirmesi çalışmıyor. Şunu çalıştırıp çıktıyı paylaş:"
+        info "pf yönlendirmesi çalışmıyor. Teşhis için:"
         info "  sudo $BIN -5 -vv"
         info "  sudo pfctl -a $ANCHOR -s rules"
     else
@@ -577,8 +577,8 @@ else
     warn "launchd servisi kurulamadı. Sebep:"
     tail -12 /tmp/dpios-service.log | sed 's/^/        /'
     echo
-    info "Bu dpiOS'u engellemez — arka planda başlatmıyoruz, o kadar."
-    info "Elle çalıştırmak için:  sudo dpios -$BEST_PRESET $DOH_ARGS"
+    info "Motor çalışmaya devam eder; yalnızca açılışta otomatik başlamaz."
+    info "Elle başlatmak için:    sudo dpios -$BEST_PRESET $DOH_ARGS"
     info "Tam log:                /tmp/dpios-service.log"
     # Servis yoksa da çalışsın: bu terminal kapanınca ölmemesi için nohup.
     nohup /usr/local/bin/dpios "-$BEST_PRESET" $DOH_ARGS --no-ui \

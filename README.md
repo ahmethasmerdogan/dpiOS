@@ -1,60 +1,75 @@
 # dpiOS
 
-macOS için DPI aşma aracı. Windows'taki GoodbyeDPI'ın yaptığı işi Apple
-Silicon'da yapıyor: giden bağlantıları, araya giren filtrenin ne istediğini
-anlayamayacağı şekilde yeniden biçimlendiriyor.
+macOS için DPI (Deep Packet Inspection) atlatma aracı. Windows'taki
+GoodbyeDPI'ın işlevini Apple Silicon üzerinde sağlar: giden bağlantıları, araya
+giren filtrenin hedefi çözemeyeceği biçimde yeniden düzenler.
 
-Kernel extension yok, Apple Developer hesabı yok, harici bağımlılık yok. Tek
-bir C programı ve `sudo`.
+Kernel extension, Apple Developer hesabı veya harici bağımlılık gerektirmez.
+Tek bir C programı ve `sudo` yeterlidir.
 
 ```bash
 cd ~ && git clone https://github.com/ahmethasmerdogan/dpiOS.git 2>/dev/null; \
 cd ~/dpiOS && git pull && sudo bash install.sh
 ```
 
-Zaten indirdiysen de aynı komut çalışır; günceller ve devam eder.
+Depo daha önce indirilmişse aynı komut güncelleyip devam eder.
 
 ---
 
-## Ne yapıyor
+## İçindekiler
 
-Türkiye'de bir siteye erişemiyorsan, genelde iki ayrı engel vardır ve ikisi de
-ayrı ayrı çözülmek zorundadır.
+- [Genel bakış](#genel-bakış)
+- [Kurulum](#kurulum)
+- [Sorun giderme](#sorun-giderme)
+- [Kapsam](#kapsam)
+- [Ayarlar](#ayarlar)
+- [Mimari](#mimari)
+- [Ölçüm sonuçları](#ölçüm-sonuçları)
+- [Geliştirme](#geliştirme)
+- [Lisans](#lisans)
 
-**Birincisi DNS.** Adres sorduğunda sana sitenin gerçek adresi yerine engel
-sayfasının adresi dönüyor. "DNS'i 8.8.8.8 yap" tavsiyesi buna çare değil, çünkü
-sorgunun kendisi yolda değiştiriliyor — hangi sunucuya sorduğunun bir önemi yok.
-dpiOS bunu, sorguyu HTTPS'in içine saklayarak çözüyor.
+---
 
-**İkincisi DPI.** Adresi doğru bulsan bile, bağlantıyı kurarken hangi siteye
-gittiğini söyleyen kısım (SNI) açıkta gidiyor; filtre onu görüp bağlantıyı
-kesiyor. dpiOS bu kısmı, filtrenin okuyamayacağı ama sunucunun sorunsuz
-anlayacağı şekilde parçalara bölüyor.
+## Genel bakış
 
-Kurulum ikisini de test edip hangisinin gerektiğine kendi karar veriyor.
+Türkiye'de erişime kapatılan siteler tipik olarak iki ayrı katmanda
+engellenmektedir ve her ikisinin de ayrı ayrı çözülmesi gerekir.
+
+**DNS katmanı.** Alan adı sorgusuna sitenin gerçek adresi yerine engelleme
+sayfasının adresi döner. Farklı bir DNS sunucusu tanımlamak sonucu
+değiştirmez, çünkü sorgunun kendisi yolda değiştirilir; hangi sunucuya
+gönderildiği önemli değildir. dpiOS bu katmanı, sorguyu HTTPS içinde taşıyan
+yerel bir çözümleyiciyle aşar.
+
+**DPI katmanı.** Adres doğru çözülse bile TLS el sıkışmasında hedef alan adını
+taşıyan alan (SNI) açık gider; filtre bunu görüp bağlantıyı sonlandırır. dpiOS
+el sıkışmasını, filtrenin ayrıştıramayacağı ancak sunucunun sorunsuz kabul
+ettiği biçimde yeniden çerçeveler.
+
+Kurulum betiği her iki katmanı da ölçer ve hangisinin müdahale gerektirdiğine
+kendisi karar verir.
 
 ---
 
 ## Kurulum
 
-macOS 11 veya üstü ve Xcode Command Line Tools gerekiyor. Yoksa script zaten
-kurman gerektiğini söyleyecek (`xcode-select --install`).
+**Gereksinimler:** macOS 11 veya üstü, Xcode Command Line Tools. İkincisi kurulu
+değilse betik `xcode-select --install` komutunu bildirerek durur.
 
 ```bash
 sudo bash install.sh
 ```
 
-Yaptıkları sırayla:
+Betiğin izlediği adımlar:
 
-1. Derler.
-2. Makinede gerekli her şeyin çalıştığını doğrular (`--check`).
+1. Kaynağı derler.
+2. Gerekli alt sistemlerin çalıştığını doğrular (`--check`).
 3. Engelin DNS mi DPI mi olduğunu ölçer.
-4. Hangi ayarın işe yaradığını **deneyerek** bulur — tahmin etmez.
-5. Bulduğu ayarla servisi kurar, açılışta otomatik başlasın diye.
-6. Sonucu söyler.
+4. Hangi ayarın sonuç verdiğini deneyerek belirler.
+5. Belirlenen ayarla launchd servisini kurar.
+6. Sonucu raporlar.
 
-Ekranda şuna benzer bir şey görürsün — her adım kendi sırasında, uzun sürenlerin
-yanında dönen bir gösterge:
+Kurulum sırasında üretilen çıktı şu biçimdedir:
 
 ```
 ╭────────────────────────────────────────────────────────────────────╮
@@ -79,267 +94,278 @@ yanında dönen bir gösterge:
     ████████████░░░░░░░░░░  preset -6 deneniyor
 ```
 
-Varsayılan olarak `discord.com`'u test eder. Başka siteler için:
+Öntanımlı olarak `discord.com` sınanır. Farklı alan adları argüman olarak
+verilebilir:
 
 ```bash
-sudo bash install.sh discord.com baskasite.com
+sudo bash install.sh ornek.com baskasite.com
 ```
 
-Ne olup bittiğinin tamamı `/tmp/dpios-install.log` dosyasına yazılır. Bir yerde
-takılırsan paylaşman gereken tek şey o dosya.
+Kurulumun tamamı `/tmp/dpios-install.log` dosyasına yazılır. Hata bildiriminde
+paylaşılması gereken tek dosya budur.
 
-### Kaldırmak
+### Kaldırma
 
 ```bash
 sudo bash scripts/uninstall-service.sh
 ```
 
-Servisi durdurur, pf kurallarını temizler, `/etc/hosts`'a eklenenleri siler,
-kapatılmışsa IPv6'yı geri açar. `--purge` eklersen binary ve log da gider.
+Servisi durdurur, pf kurallarını temizler, `/etc/hosts` üzerinde yapılan
+eklemeleri geri alır ve kapatılmışsa IPv6'yı yeniden etkinleştirir. `--purge`
+argümanı binary ve log dosyasını da siler.
 
 ---
 
-## Çalışmıyorsa
+## Sorun giderme
 
-Önce şu: **ağın tamamen gittiyse** panik yapma, tek komut geri getirir.
+Ağ bağlantısı tamamen kesilirse aşağıdaki komut önceki duruma döndürür:
 
 ```bash
 sudo pfctl -a com.apple/dpios -F all
 ```
 
-Normalde dpiOS kapanırken bunu kendisi yapıyor — Ctrl-C, kill, hatta çökme
-durumunda bile. Bu komut sadece o da olmazsa diye duruyor.
+dpiOS normal koşullarda bu temizliği kapanırken kendisi yapar; Ctrl-C, `kill`
+ve çökme durumları dahil. Komut yalnızca bunun da gerçekleşmediği durumlar
+içindir.
 
-Sonrası:
-
-| Ne oluyor | Ne yap |
+| Belirti | Çözüm |
 |---|---|
-| `command not found` | `dpiOS` klasöründe değilsin ya da `git pull` yapmadın. En üstteki komut ikisini de halleder |
-| Site hâlâ açılmıyor | `sudo dpios -6`, sonra `-7`, sonra `-9` dene |
-| Uygulama açılmıyor ama web sürümü açılıyor | Uygulamayı ⌘Q ile tamamen kapat, öyle aç. Pencereyi kapatmak yetmez |
-| Tarayıcı bazen açıyor bazen açmıyor | `sudo dpios -5 --block-quic` — bazı siteler UDP'ye kaçıyor |
-| Hiçbir şey değişmemiş gibi | `sudo dpios -5 -vv` çalıştır; `TLS ClientHello -> site.com` satırı görüyor musun |
-| VPN açıkken bozuluyor | `--inject raw` ekle |
+| `command not found` | Çalışma dizini `dpiOS` değil ya da depo güncellenmemiş. Yukarıdaki tek satırlık komut her ikisini de giderir |
+| Site açılmıyor | Sırasıyla `sudo dpios -6`, `-7` ve `-9` denenmelidir |
+| Web sürümü açılıyor, masaüstü uygulaması açılmıyor | Uygulama ⌘Q ile tamamen kapatılıp yeniden başlatılmalıdır; pencereyi kapatmak yeterli değildir |
+| Tarayıcıda sonuç tutarsız | `sudo dpios -5 --block-quic` — bazı siteler HTTP/3 üzerinden bağlanmayı dener |
+| Hiçbir değişiklik gözlenmiyor | `sudo dpios -5 -vv` çıktısında `TLS ClientHello -> alanadi` satırları aranmalıdır |
+| VPN etkinken bozuluyor | `--inject raw` eklenmelidir |
 
-Gerçekten ne gönderildiğini görmek istersen:
+Gönderilen paketleri doğrudan incelemek için:
 
 ```bash
 sudo tcpdump -i en0 -n 'tcp port 443 and host <hedef-ip>'
 ```
 
-Tek bir bağlantı için iki ayrı paket görmen lazım.
+Tek bağlantı için iki ayrı paket görülmesi beklenir.
 
 ---
 
-## Neler çalışır
+## Kapsam
 
-Ölçtüklerim:
+Doğrulanmış davranış:
 
-- **Web siteleri** — çalışıyor, hem tarayıcıda hem `curl` ile doğrulandı.
-- **Masaüstü uygulamaları** — çalışıyor. Bunlar `gateway.us-east1-b.discord.gg`
-  gibi, çalışırken öğrendikleri adresleri çözüyor; bu yüzden `/etc/hosts`'a elle
-  adres yazmak yetmiyor, gerçek bir DNS çözümleyici gerekiyor. dpiOS onu içinde
-  barındırıyor.
-- **Sesli sohbet** — engellenmiş görünmüyor. Discord'un ses sunucuları
-  `discord.media` altında ve bu alan adı ne DNS'te ne de DPI'da engelli çıktı
-  (`latency.discord.media` hem doğru adresi veriyor hem de bağlantı sorunsuz
-  kuruluyor).
+- **Web siteleri.** Tarayıcı ve `curl` ile doğrulanmıştır.
+- **Masaüstü uygulamaları.** Bu uygulamalar `gateway.us-east1-b.discord.gg`
+  gibi çalışma anında öğrenilen adları çözer. Statik bir `/etc/hosts` listesi
+  bu adları kapsayamadığı için gerçek bir DNS çözümleyici gerekir; dpiOS bunu
+  içerir.
+- **Sesli bağlantı.** Engelli görünmemektedir. İlgili sunucular `discord.media`
+  alan adı altındadır ve bu alan adı ne DNS ne de DPI katmanında engelli
+  çıkmıştır.
 
-Çalışmayanlar ve nedenleri:
+Kapsam dışında kalanlar:
 
-- **Gelen paketleri filtreleme (`-p`).** GoodbyeDPI'ın bu özelliği burada
-  yapılamıyor: dönüş trafiği tasarım gereği dpiOS'a uğramıyor, dolayısıyla
-  filtrenin gönderdiği sahte RST paketi yakalanamıyor. Bayrağı verirsen uyarı
-  basıp yok sayar.
-- **QUIC / HTTP/3.** UDP üzerinden gittiği için TCP'yi işleyen dpiOS'a hiç
-  uğramıyor. `--block-quic` ile UDP/443'ü kapatıp tarayıcıyı TCP'ye
-  düşürebilirsin, ama bu QUIC'i sorunsuz kullanan siteleri de yavaşlatır. O
-  yüzden varsayılan olarak kapalı.
-- **Bazı ClientHello'lar.** Aşağıda anlatılan 5 baytı bulamazsa dpiOS o
-  bağlantıya dokunmuyor. Paketi asla büyütmüyor.
-- **IPv6** deneysel (`--ipv6`), varsayılan kapalı.
+- **Gelen paket filtreleme (`-p`).** Dönüş trafiği tasarım gereği dpiOS
+  üzerinden geçmez; bu nedenle filtrenin ürettiği sahte RST paketi
+  yakalanamaz. Bayrak verildiğinde uyarı üretilir ve yok sayılır.
+- **QUIC / HTTP/3.** UDP üzerinden taşındığı için TCP yolunu işleyen dpiOS'a
+  uğramaz. `--block-quic` ile UDP/443 kapatılarak istemci TCP'ye
+  düşürülebilir; bu seçenek QUIC'i sorunsuz kullanan siteleri de yavaşlattığı
+  için öntanımlı olarak kapalıdır.
+- **Yer açılamayan ClientHello'lar.** Aşağıda açıklanan beş baytlık alan
+  bulunamazsa ilgili bağlantıya müdahale edilmez; paket hiçbir koşulda
+  büyütülmez.
+- **IPv6.** Deneyseldir (`--ipv6`), öntanımlı olarak kapalıdır.
 
 ---
 
 ## Ayarlar
 
-Preset numaraları GoodbyeDPI ile aynı, alışkanlık bozulmasın diye.
+Preset numaraları GoodbyeDPI ile aynıdır.
 
-| | Ne yapar |
+| Preset | İşlev |
 |---|---|
-| `-1`…`-4` | HTTP odaklı, hafif. Eski usul engellere |
-| `-5` | Önerilen başlangıç. TLS kayıt bölme + parçalama + otomatik TTL'li sahte paket |
-| `-6` | Sahte paket bozuk sequence numarasıyla gider |
-| `-7` | Sahte paket bozuk checksum'la gider |
+| `-1`…`-4` | HTTP odaklı hafif müdahaleler |
+| `-5` | Önerilen başlangıç. TLS kayıt bölme, parçalama ve otomatik TTL'li sahte paket |
+| `-6` | Sahte paket geçersiz sequence numarasıyla gönderilir |
+| `-7` | Sahte paket geçersiz checksum ile gönderilir |
 | `-8` | `-6` ve `-7` birlikte |
-| `-9` | `-8` + bölme noktası tam alan adının ortasında |
+| `-9` | `-8` yapılandırmasına ek olarak bölme noktası alan adının ortasına alınır |
 
-`install.sh` bunları senin bağlantında deneyip çalışanı seçtiği için normalde
-elle uğraşman gerekmiyor.
+Kurulum betiği bu ayarları hedef bağlantı üzerinde sınayıp sonuç vereni
+seçtiğinden, elle seçim normalde gerekmez.
 
 Sık kullanılan bayraklar:
 
 ```
---doh              şifreli DNS çözümleyiciyi çalıştır (127.0.0.1:53)
---record-frag      ClientHello'yu iki TLS kaydına böl (varsayılan açık)
---frag-sni         bölmeyi alan adının tam ortasında yap
---block-quic       UDP/443'ü kapat, tarayıcı TCP'ye düşsün
---blacklist FILE   sadece listedeki alan adlarına dokun
---whitelist FILE   listedekilere hiç dokunma
---dry-run          tespit et ve logla ama hiçbir şeyi değiştirme
---check            makineyi doğrula ve çık
---unload           kalmış pf kurallarını temizle ve çık
--vv                paket paket log
+--doh              şifreli DNS çözümleyiciyi çalıştırır (127.0.0.1:53)
+--record-frag      ClientHello'yu iki TLS kaydına böler (öntanımlı açık)
+--frag-sni         bölme noktasını alan adının ortasına alır
+--block-quic       UDP/443'ü kapatır, istemciyi TCP'ye düşürür
+--blacklist FILE   yalnızca listedeki alan adlarına müdahale eder
+--whitelist FILE   listedeki alan adlarına müdahale etmez
+--dry-run          tespit eder ve kaydeder, değişiklik yapmaz
+--check            alt sistemleri doğrular ve çıkar
+--unload           artakalan pf kurallarını temizler ve çıkar
+-vv                paket düzeyinde kayıt
 ```
 
-Tamamı için `dpios --help`.
+Tam liste için `dpios --help`.
 
-Liste dosyalarında satır başına bir alan adı yazılır; `#` yorum, `0.0.0.0 host`
-biçimi ve baştaki `*.` kabul edilir. `example.com` yazmak `www.example.com`'u da
-kapsar, `notexample.com`'u kapsamaz.
+Liste dosyalarında satır başına bir alan adı yazılır. `#` ile başlayan satırlar
+yorumdur; `0.0.0.0 alanadi` biçimi ve baştaki `*.` kabul edilir. Eşleşme alt
+alan adlarını kapsar: `example.com` girdisi `www.example.com` ile eşleşir,
+`notexample.com` ile eşleşmez.
 
-Terminalde çalıştırdığında log seli yerine canlı bir panel çizer: kaç paket
-işlendi, hangi alan adları geçti, kaç hata oldu. `-vv` verirsen ya da servis
-olarak çalışırsa düz log'a döner.
+Terminalde çalıştırıldığında akan kayıt yerine yerinde güncellenen bir durum
+paneli çizilir. `-vv` verildiğinde veya servis olarak çalıştırıldığında düz
+kayda geçer.
 
 ---
 
-## Nasıl çalışıyor
+## Mimari
 
-GoodbyeDPI, Windows'ta WinDivert sürücüsüyle paketleri çekirdek seviyesinde
-yakalar. macOS'ta öyle bir sürücü yok ve Apple Silicon'da kext yazma yolu
-pratikte kapalı. dpiOS aynı işi macOS'un kendi parçalarını birleştirerek
-yapıyor:
+GoodbyeDPI, Windows'ta WinDivert sürücüsüyle paketleri çekirdek düzeyinde
+yakalar. macOS'ta eşdeğer bir sürücü bulunmadığı ve Apple Silicon'da kext
+geliştirme yolu pratikte kapalı olduğu için dpiOS aynı işlevi işletim
+sisteminin kendi bileşenlerini birleştirerek sağlar:
 
 ```
   uygulama
      │
      ▼
-  kernel TCP/IP            ← kaynak IP burada seçilir
+  kernel TCP/IP            ← kaynak adres burada seçilir
      │
      ▼
-  pf: route-to utunN       ← sadece TCP 80/443, sadece internete çıkan
+  pf: route-to utunN       ← yalnızca TCP 80/443, yalnızca dışa çıkan
      │
      ▼
   utun ──────────────▶  dpios
-                          │  ClientHello'yu iki TLS kaydına böl
-                          │  TCP segmentine böl, sırayı ters çevir
-                          │  sahte paket üret
+                          │  ClientHello iki TLS kaydına bölünür
+                          │  TCP segmentine bölünür, sıra ters çevrilir
+                          │  sahte paket üretilir
                           ▼
                        /dev/bpf ──▶ en0 ──▶ internet
 
-  dönüş trafiği: en0 ──▶ kernel   (dpios'a uğramaz)
+  dönüş trafiği: en0 ──▶ kernel   (dpios üzerinden geçmez)
 ```
 
-Üç karar bu mimariyi belirliyor.
+Mimariyi üç karar belirler.
 
-**Varsayılan rota değişmiyor.** `pf route-to` sadece ilgilendiğimiz trafiği
-utun'a çeviriyor. Kaynak adres değişmediği için NAT yazmaya gerek kalmıyor.
+**Öntanımlı rota değiştirilmez.** `pf route-to` yalnızca ilgilenilen trafiği
+utun arayüzüne yönlendirir. Kaynak adres değişmediği için NAT katmanına gerek
+kalmaz.
 
-**Dönüş trafiği bize uğramıyor.** Kernel bağlantıyı zaten tanıyor. Hız için
-iyi; bedeli, gelen paketlere müdahale edememek.
+**Dönüş trafiği işlenmez.** Bağlantıyı çekirdek zaten tanır. Bu, başarım
+açısından avantajlıdır; karşılığında gelen paketlere müdahale edilemez.
 
-**Paket uzunluğu asla değişmiyor.** Kernel o sequence numarasında tam N bayt
-gönderdiğini sanıyor. Bir bayt eksik ya da fazla göndermek akışı bozar ve dönüş
-yolu bizden geçmediği için düzeltilemez. Bu kısıt kendini iki yerde gösteriyor:
+**Paket uzunluğu değiştirilmez.** Çekirdek, ilgili sequence numarasında tam N
+bayt gönderdiğini varsayar. Bir bayt eksik veya fazla göndermek akışı bozar ve
+dönüş yolu işlenmediği için düzeltilemez. Bu kısıt iki noktada belirleyicidir:
 
-- `-s` (Host'tan sonraki boşluğu sil) ve `-a` (metod ile URI arasına boşluk ekle)
-  hep birlikte uygulanıyor. Biri bir bayt alıyor, öbürü bir bayt veriyor.
-- TLS kayıt bölme, ikinci kayıt için 5 bayt fazladan başlık istiyor. O 5 bayt
-  ClientHello'nun içinden geri kazanılıyor: padding eklentisi (RFC 7685)
-  küçültülüyor ya da bir GREASE eklentisi (RFC 8701) atılıyor. İkisi de
-  sunucunun yok saymak zorunda olduğu alanlar. Bulunamazsa dpiOS o bağlantıyı
-  olduğu gibi bırakıyor.
+- `-s` (Host başlığından sonraki boşluğun silinmesi) ve `-a` (metot ile URI
+  arasına boşluk eklenmesi) daima birlikte uygulanır. Biri bir bayt eksiltir,
+  diğeri bir bayt ekler.
+- TLS kayıt bölme, ikinci kayıt için beş baytlık ek başlık gerektirir. Bu beş
+  bayt ClientHello'nun içinden geri kazanılır: padding uzantısı (RFC 7685)
+  küçültülür veya bir GREASE uzantısı (RFC 8701) çıkarılır. Her ikisi de
+  sunucunun yok saymakla yükümlü olduğu alanlardır. Uygun alan bulunamazsa
+  bağlantıya müdahale edilmez.
 
-Paketler `/dev/bpf` üzerinden ham ethernet çerçevesi olarak gönderiliyor. Bu yol
-routing tablosunu ve pf çıkışını atladığı için kendi ürettiğimiz paketler tekrar
-utun'a düşüp döngüye girmiyor.
+Paketler `/dev/bpf` üzerinden ham ethernet çerçevesi olarak gönderilir. Bu yol
+yönlendirme tablosunu ve pf çıkış zincirini atladığından, üretilen paketler
+tekrar utun arayüzüne düşerek döngü oluşturmaz.
 
 ---
 
-## Ölçümler
+## Ölçüm sonuçları
 
-Buradaki her şey bir Türk ISS'i üzerinde ölçüldü.
+Aşağıdaki bulgular bir Türkiye operatörü üzerinde ölçülmüştür.
 
-**DNS tarafı.** Sistem `discord.com` için `195.175.254.2` diyor, gerçeği
-`162.159.136.232`. Sorgu, hangi sunucuya gönderilirse gönderilsin araya
-giriliyor:
+### DNS katmanı
 
-| | `example.com` | `discord.com` |
+Sistem çözümleyicisi `discord.com` için `195.175.254.2` döndürmektedir; gerçek
+adres `162.159.136.232`. Sorgu, hedef sunucudan bağımsız olarak
+değiştirilmektedir:
+
+| Sorgu yolu | `example.com` | `discord.com` |
 |---|---|---|
-| `1.1.1.1` UDP | cevap geliyor | zaman aşımı |
-| `1.1.1.1` TCP | cevap geliyor | RST |
-| DoH (şifreli) | cevap geliyor | gerçek adres |
+| `1.1.1.1` UDP/53 | yanıt | zaman aşımı |
+| `1.1.1.1` TCP/53 | yanıt | RST |
+| DoH (şifreli) | yanıt | gerçek adres |
 
-Filtre alan adına duyarlı ama harfe duyarsız — büyük/küçük karıştırmak işe
-yaramadı. Ayrıca wildcard: `rastgele-isim.discord.gg` gibi hiç var olmayan bir
-isim bile engel sayfasına gidiyor. Statik bir `/etc/hosts` listesinin
-uygulamaları kurtaramamasının sebebi bu.
+Filtre alan adına duyarlı, harf büyüklüğüne duyarsızdır; DNS 0x20
+rastgeleleştirmesi sonucu değiştirmemiştir. Ayrıca joker karakterli
+çalışmaktadır: `rastgele-isim.discord.gg` gibi var olmayan bir ad da engelleme
+sayfasına yönlendirilmektedir. Statik bir `/etc/hosts` listesinin masaüstü
+uygulamaları için yetersiz kalmasının nedeni budur.
 
-**DPI tarafı.** Adres doğru olsa bile TLS el sıkışması 14 ms'de RST yiyor.
-Denenenler:
+### DPI katmanı
 
-| | Sonuç |
+Adres doğru çözüldüğünde dahi TLS el sıkışması yaklaşık 14 ms içinde RST
+almaktadır. Denenen yöntemler:
+
+| Yöntem | Sonuç |
 |---|---|
-| dokunulmamış (kontrol) | RST |
-| TCP'de 2. bayttan bölme | RST |
+| Müdahalesiz (kontrol) | RST |
+| TCP'de ikinci bayttan bölme | RST |
 | TCP'de alan adının ortasından bölme | RST |
-| alan adını karışık harfle yazma | RST |
-| SNI eklentisini listenin sonuna alma | RST |
-| **iki TLS kaydına bölme** | **ServerHello** |
+| Alan adının harf büyüklüğünü değiştirme | RST |
+| SNI uzantısını listenin sonuna alma | RST |
+| **İki TLS kaydına bölme** | **ServerHello** |
 
-Yani bu filtre TCP akışını birleştirdikten sonra inceliyor; segment bölmek işe
-yaramıyor. Kayıt katmanında bölmek yarıyor, çünkü bir handshake mesajının birden
-çok kayda yayılması TLS'te geçerli ve sadece ilk kaydı ayrıştıran bir
-denetleyici bütün mesajı hiç görmüyor.
+Sonuç, filtrenin TCP akışını birleştirdikten sonra incelediğini
+göstermektedir; segment düzeyinde bölme etkisizdir. Kayıt düzeyinde bölme
+etkilidir, çünkü bir handshake mesajının birden çok kayda yayılması TLS
+belirtimine uygundur ve yalnızca ilk kaydı ayrıştıran bir denetleyici mesajın
+tamamını göremez.
 
-Bu, dpiOS'un ürettiği baytlarla canlı olarak doğrulandı. Üç ClientHello
-biçiminin üçünde de işlenmemiş paket RST alıyor, işlenmiş paket ServerHello
-alıyor: tek segmente sığan hello, Chromium'unki gibi iki segmente taşan hello,
-ve padding eklentisi segmenti aşan hello. Üçünde de uzunluk birebir korunuyor.
+Bu davranış dpiOS'un ürettiği paketlerle doğrulanmıştır. Üç ClientHello
+biçiminde de müdahalesiz paket RST, müdahale edilmiş paket ServerHello
+almaktadır: tek segmente sığan hello, Chromium'unki gibi iki segmente taşan
+hello ve padding uzantısı segment sınırını aşan hello. Üç durumda da toplam
+uzunluk korunmaktadır.
 
 ---
 
 ## Geliştirme
 
 ```
-install.sh      tek komutluk kurulum ve teşhis
+install.sh      kurulum ve teşhis betiği
 src/
-  main.c        kqueue döngüsü, sinyaller, kurulum/temizlik sırası
-  cli.c         argümanlar
-  config.c      varsayılanlar ve preset'ler
-  check.c       --check
-  ui.c          canlı terminal paneli
+  main.c        kqueue döngüsü, sinyaller, kurulum ve temizlik sırası
+  cli.c         argüman ayrıştırma
+  config.c      öntanımlı değerler ve preset'ler
+  check.c       --check self-test
+  ui.c          canlı durum paneli
   dns.c         şifreli DNS çözümleyici
-  utun.c        utun cihazı (PF_SYSTEM kernel control)
-  pf.c          pf kurallarını yükleme ve temizleme
+  utun.c        utun arayüzü (PF_SYSTEM kernel control)
+  pf.c          pf kurallarının yüklenmesi ve temizlenmesi
   inject.c      BPF ve raw socket enjektörleri
-  netinfo.c     rota, arayüz, ARP/NDP tablosu
+  netinfo.c     rota, arayüz ve ARP/NDP tablosu
   monitor.c     pasif TTL gözlemcisi
-  engine.c      DPI bypass mantığı
+  engine.c      DPI atlatma mantığı
   tls.c         ClientHello ayrıştırma ve TLS kayıt bölme
-  http.c        HTTP header işleme
+  http.c        HTTP başlık işleme
   blacklist.c   alan adı listeleri
   checksum.c    IPv4/IPv6/TCP/UDP checksum
   util.c        fork/exec yardımcıları
 tests/          birim testleri
 ```
 
-`make test` protokol ayrıştırıcılarını, kayıt bölmeyi, checksum kodunu ve
-listeleri gerçekten çalıştırarak test ediyor. En kritik iki invaryant orada
-kontrol ediliyor: HTTP header işleme uzunluğu değiştirmiyor, ve TLS kayıt bölme
-ya uzunluğu birebir koruyor ya da hiç dokunmuyor.
+`make test` protokol ayrıştırıcılarını, kayıt bölmeyi, checksum kodunu ve liste
+işlemlerini çalıştırarak sınar. İki invaryant burada doğrulanır: HTTP başlık
+işleme toplam uzunluğu değiştirmez ve TLS kayıt bölme ya uzunluğu birebir korur
+ya da hiç müdahale etmez.
 
-Mac'in yoksa `./scripts/crossbuild.sh` Linux'ta gerçek bir Mach-O binary
-üretiyor. Zig'in C derleyicisi Darwin başlıklarının çoğunu taşıyor; eksik dördü
-(`net/if_utun.h`, `net/bpf.h`, `sys/sys_domain.h`, `netinet/ip6.h`) Apple'ın
-açık kaynak XNU deposundan çekiliyor, yani derleme gerçek tanımlara karşı
-yapılıyor. Üretilen binary imzasız ve donanımda test edilmemiş olur; Mac'te
-`make` kullan.
+macOS erişimi olmayan ortamlarda `./scripts/crossbuild.sh` geçerli bir Mach-O
+binary üretir. Zig'in C derleyicisi Darwin başlıklarının çoğunu içerir; eksik
+dördü (`net/if_utun.h`, `net/bpf.h`, `sys/sys_domain.h`, `netinet/ip6.h`)
+Apple'ın açık kaynak XNU deposundan alınır, dolayısıyla derleme gerçek
+tanımlara karşı yapılır. Üretilen binary imzasızdır ve donanım üzerinde
+sınanmamıştır; macOS üzerinde `make` kullanılmalıdır.
 
 ---
 
-## Lisans ve sorumluluk
+## Lisans
 
-Bu araç kendi makinendeki trafiğin nasıl biçimlendiğini kontrol etmen için.
-Bağlandığın ağın kurallarına uymak sana ait.
+Bu araç, kullanıcının kendi makinesindeki ağ trafiğinin nasıl biçimlendiğini
+denetlemesi amacıyla geliştirilmiştir. Bağlanılan ağın kullanım koşullarına
+uyum kullanıcının sorumluluğundadır.
