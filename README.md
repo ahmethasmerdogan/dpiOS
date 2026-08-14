@@ -14,6 +14,12 @@ cd ~/dpiOS && git pull && sudo bash install.sh
 
 Depo daha önce indirilmişse aynı komut güncelleyip devam eder.
 
+> **Sorumluluk.** dpiOS bir ağ teşhis ve trafik biçimlendirme aracıdır. Hangi
+> ağda, hangi amaçla ve hangi mevzuata tabi olarak kullanıldığının hukuki
+> sorumluluğu tamamen kullanıcıya aittir. Belgelerde yer alan alan adları
+> teknik ölçüm örnekleridir; herhangi bir kullanım önerisi veya yönlendirmesi
+> içermez. Ayrıntı için [Sorumluluk](#sorumluluk) bölümüne bakınız.
+
 ---
 
 ## İçindekiler
@@ -26,7 +32,7 @@ Depo daha önce indirilmişse aynı komut güncelleyip devam eder.
 - [Mimari](#mimari)
 - [Ölçüm sonuçları](#ölçüm-sonuçları)
 - [Geliştirme](#geliştirme)
-- [Lisans](#lisans)
+- [Sorumluluk](#sorumluluk)
 
 ---
 
@@ -94,8 +100,9 @@ Kurulum sırasında üretilen çıktı şu biçimdedir:
     ████████████░░░░░░░░░░  preset -6 deneniyor
 ```
 
-Öntanımlı olarak `discord.com` sınanır. Farklı alan adları argüman olarak
-verilebilir:
+Öntanımlı sınama listesi `discord.com`, `roblox.com` ve `wattpad.com`
+alan adlarından oluşur; seçim gerekçesi [Kapsam](#kapsam) bölümündedir. Farklı
+alan adları argüman olarak verilebilir:
 
 ```bash
 sudo bash install.sh ornek.com baskasite.com
@@ -149,7 +156,32 @@ Tek bağlantı için iki ayrı paket görülmesi beklenir.
 
 ## Kapsam
 
-Doğrulanmış davranış:
+### Sınanan siteler
+
+Geliştirme sırasında bir Türkiye operatörü üzerinde ölçülen sonuçlar. `düz TLS`
+sütunu müdahalesiz bağlantıyı, son sütun dpiOS devredeyken aynı bağlantıyı
+gösterir.
+
+| Alan adı | DNS | düz TLS | dpiOS ile |
+|---|---|---|---|
+| discord.com | engelli | RST | açılıyor |
+| roblox.com | engelli | RST | açılıyor |
+| wattpad.com | engelli | RST | açılıyor |
+| reddit.com | temiz | açılıyor | açılıyor |
+| instagram.com | temiz | açılıyor | açılıyor |
+| github.com | temiz | açılıyor | açılıyor |
+| wikipedia.org | temiz | açılıyor | açılıyor |
+
+İlk üçü kurulum betiğinin öntanımlı sınama listesidir; üçü de hesap açılabilen
+servislerdir ve her ikisi katmanda da engelli ölçülmüştür. Alt sıradaki dört
+alan adı karşılaştırma amaçlıdır: engelli olmadıkları için dpiOS'un normal
+trafiği bozmadığını da gösterirler.
+
+Bu tablo tek bir operatörde, belirli bir tarihte alınmış ölçümdür. Engelleme
+yöntemleri operatöre ve zamana göre değişir; kurulum betiği bu nedenle listeyi
+sabit kabul etmez, her çalıştırıldığında yeniden ölçer.
+
+### Doğrulanmış davranış
 
 - **Web siteleri.** Tarayıcı ve `curl` ile doğrulanmıştır.
 - **Masaüstü uygulamaları.** Bu uygulamalar `gateway.us-east1-b.discord.gg`
@@ -364,8 +396,23 @@ sınanmamıştır; macOS üzerinde `make` kullanılmalıdır.
 
 ---
 
-## Lisans
+## Sorumluluk
 
-Bu araç, kullanıcının kendi makinesindeki ağ trafiğinin nasıl biçimlendiğini
-denetlemesi amacıyla geliştirilmiştir. Bağlanılan ağın kullanım koşullarına
-uyum kullanıcının sorumluluğundadır.
+dpiOS, kullanıcının kendi cihazındaki ağ trafiğinin nasıl biçimlendiğini
+inceleyip denetlemesi amacıyla geliştirilmiş bir teşhis ve paket işleme
+aracıdır.
+
+- Aracın hangi ağda ve hangi amaçla çalıştırıldığı, bağlanılan ağın kullanım
+  koşullarına ve yürürlükteki mevzuata uyum dahil olmak üzere **tamamen
+  kullanıcının sorumluluğundadır.** Depo sahibi ve katkıda bulunanlar,
+  kullanımdan doğabilecek hiçbir sonuçtan sorumlu tutulamaz.
+- Belgelerde ve kurulum betiğinde geçen alan adları, engelleme yöntemlerinin
+  teknik olarak nasıl çalıştığını göstermek üzere seçilmiş ölçüm örnekleridir.
+  Bunlar bir tavsiye, yönlendirme veya kullanım çağrısı niteliği taşımaz.
+- Ölçümler tek bir operatörde ve belirli bir tarihte alınmıştır; genel geçer
+  bir tespit olarak sunulmamaktadır.
+- Yazılım olduğu gibi sunulur. Belirli bir amaca uygunluk dahil olmak üzere
+  hiçbir garanti verilmez.
+
+Depoya henüz bir açık kaynak lisansı eklenmemiştir; bu durumda telif hakları
+saklıdır. Lisans tercihi belirlendiğinde bu bölüm güncellenecektir.

@@ -17,11 +17,13 @@ ANCHOR="com.apple/dpios"
 PRESETS=(5 6 9 7)          # denenme sırası
 CLEAN_DNS="1.1.1.1"
 
-# test edilecek siteler
+# Öntanımlı sınama listesi. Bu üç alan adı, geliştirme sırasında bir Türkiye
+# operatörü üzerinde hem DNS hem DPI katmanında engelli ölçülmüş ve dpiOS ile
+# açıldığı doğrulanmış servislerdir. Argüman verilirse liste değiştirilir.
 if [[ $# -gt 0 ]]; then
     SITES=("$@")
 else
-    SITES=(discord.com)
+    SITES=(discord.com roblox.com wattpad.com)
 fi
 CONTROL_SITE="example.com"   # her zaman açık olmalı, ölçüm referansı
 
